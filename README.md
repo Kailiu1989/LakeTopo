@@ -13,3 +13,21 @@ The complete license and bundled third-party notices are available in
 [`LICENSES/CesiumJS-LICENSE.md`](LICENSES/CesiumJS-LICENSE.md).
 
 This project is not an official product of, nor endorsed by, Cesium GS, Inc.
+
+# Contributors
+
+## Core Team
+
+- **石力** ([@username1](https://github.com/username1))
+  - 软件架构与核心开发
+
+- **曹子乐** ([@NULL233666](https://github.com/NULL233666))
+  - 测试与bug修复
+  - 新功能添加
+  - 文档编写和数据整理
+  
+- **刘凯** ([@]())
+  - 总体设计
+  - 项目负责人
+## Other Contributions
+
