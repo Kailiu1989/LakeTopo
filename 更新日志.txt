@@ -6,14 +6,3 @@
 #4.3维地图无法正常加载显示数据（已解决
 #5.后续考虑添加一个批量投影转换页面功能 （已添加
 
-
-1.打开或创建一个工作空间
-2.水域栅格提取，用于提取栅格二值水域范围(_extent)
-3.岸线生成，用于提取湖泊岸线shp(shoreline)
-4.缓冲区建立，为湖泊建立缓冲区，输出缓冲区shp(_buffer)、缓冲区内dem(_merit)、缓冲区内坡度(_slope)
-5.输入工作区和_merit和实测点shp，输出shoreline.tif survey.tif和ml_Data中数据
-6.输入工作区，输出temp_ML中预测点shp等、与MLData中相关csv
-7.输入生成的预测点shp、岸线shp、湖范围shp、输出名称，得到预测水深dem
-8.输入_Merit.tif，湖范围shp、预测水深dem，得到湖盆高程dem
-9.输入湖盆高程dem，需要镶嵌的dem，得到最终整体湖盆dem
-10.输入工作空间预测准确度
