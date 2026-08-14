@@ -18,7 +18,7 @@ This project is not an official product of, nor endorsed by, Cesium GS, Inc.
 
 ## Core Team
 
-- **石力** ([@username1](https://github.com/username1))
+- **石力** ([@GISnuomi](https://github.com/GISnuomi))
   - 软件架构与核心开发
 
 - **曹子乐** ([@NULL233666](https://github.com/NULL233666))
