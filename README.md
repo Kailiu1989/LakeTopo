@@ -26,8 +26,11 @@ This project is not an official product of, nor endorsed by, Cesium GS, Inc.
   - 新功能添加
   - 文档编写和数据整理
   
-- **刘凯** ([@]())
+- **刘凯** ([@Kailiu1989](https://github.com/Kailiu1989))
   - 总体设计
   - 项目负责人
+
+- **袁晨阳** ([@](https://github.com/))
+  - 辅助开发
 ## Other Contributions
 
