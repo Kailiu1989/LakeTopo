@@ -1,0 +1,16 @@
+name: laketopo-build
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - gdal>=3.6
+  - numpy>=1.24
+  - pandas>=2.2
+  - matplotlib>=3.8
+  - openpyxl>=3.1
+  - pyinstaller
+  - pyqt=5
+  - pyqtwebengine
+  - pyqtgraph>=0.13.3
+  - xgboost>=2.1.4

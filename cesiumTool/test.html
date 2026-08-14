@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vue3渐变色选择器</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+  <script src="https://unpkg.com/vue@3.2.31/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    
+    body {
+      background: linear-gradient(135deg, #1a2a6c, #2c3e50);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      color: #333;
+    }
+    
+    .container {
+      width: 100%;
+      max-width: 900px;
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.92);
+      border-radius: 20px;
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+    }
+    
+    .header {
+      background: linear-gradient(45deg, #3a7bd5, #00d2ff);
+      padding: 30px;
+      color: white;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    }
+    
+    .header p {
+      font-size: 1.1rem;
+      opacity: 0.9;
+      max-width: 600px;
+      margin: 15px auto 0;
+    }
+    
+    .content {
+      padding: 40px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+    }
+    
+    .gradient-section {
+      position: relative;
+      padding: 25px;
+      background: #f8f9fe;
+      border-radius: 15px;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+    }
+    
+    .gradient-preview {
+      width: 200px;
+      height: 40px;
+      margin: 20px auto;
+      border-radius: 8px;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+      position: relative;
+      cursor: pointer;
+    }
+    
+    .slider-container {
+      width: 200px;
+      height: 20px;
+      margin: 10px auto 20px;
+      position: relative;
+    }
+    
+    .slider-handle {
+      position: absolute;
+      top: -5px;
+      width: 30px;
+      height: 30px;
+      background: white;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      cursor: grab;
+      transform: translateX(-15px);
+      border: 3px solid white;
+      z-index: 10;
+      transition: transform 0.2s ease;
+    }
+    
+    .slider-handle:hover {
+      transform: translateX(-15px) scale(1.1);
+    }
+    
+    .slider-track {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 6px;
+      width: 100%;
+      background: #ddd;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    
+    .color-info {
+      display: flex;
+      justify-content: center;
+      margin-top: 25px;
+      gap: 15px;
+    }
+    
+    .color-sample {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    .color-details {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .color-value {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-top: 8px;
+      background: #f0f5ff;
+      padding: 5px 15px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .color-value:hover {
+      background: #3a7bd5;
+      color: white;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(58, 123, 213, 0.3);
+    }
+    
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-bottom: 25px;
+      position: relative;
+      padding-bottom: 15px;
+    }
+    
+    h2::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px;
+      height: 4px;
+      background: linear-gradient(to right, #ff4500, #409EFF);
+      border-radius: 2px;
+    }
+    
+    .instruction {
+      margin-top: 30px;
+      padding: 20px;
+      background: rgba(58, 123, 213, 0.05);
+      border-radius: 12px;
+      text-align: center;
+    }
+    
+    .instruction p {
+      line-height: 1.8;
+      color: #555;
+      margin-bottom: 15px;
+    }
+    
+    .features {
+      margin-top: 20px;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+    
+    .feature {
+      background: white;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+      width: 160px;
+      text-align: center;
+      transition: transform 0.3s ease;
+    }
+    
+    .feature:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+    }
+    
+    .feature-icon {
+      font-size: 2rem;
+      margin-bottom: 15px;
+      color: #3a7bd5;
+    }
+    
+    .footer {
+      text-align: center;
+      padding: 30px;
+      color: #777;
+      background: #f8f9ff;
+      border-top: 1px solid #eee;
+    }
+    
+    @media (max-width: 768px) {
+      .content {
+        grid-template-columns: 1fr;
+      }
+      
+      .header h1 {
+        font-size: 2rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="container">
+      <div class="card">
+        <div class="header">
+          <h1>渐变色选择器</h1>
+          <p>基于 Vue3 与 Element-UI，实现从 #ff4500 到 #409EFF 的颜色渐变选择</p>
+        </div>
+        
+        <div class="content">
+          <div class="gradient-section">
+            <h2>颜色选择器</h2>
+            
+            <!-- 渐变色预览 -->
+            <div 
+              class="gradient-preview" 
+              :style="{
+                background: gradientStyle
+              }"
+            ></div>
+            
+            <!-- 滑块控制区域 -->
+            <div class="slider-container" @click="updatePosition">
+              <div class="slider-track">
+                <div 
+                  class="slider-track" 
+                  :style="{
+                    background: gradientStyle
+                  }"
+                ></div>
+              </div>
+              <div 
+                class="slider-handle" 
+                :style="{
+                  left: `${positionPercentage}%`,
+                  backgroundColor: currentColor
+                }"
+                @mousedown="startDrag"
+              ></div>
+            </div>
+            
+            <!-- 颜色信息 -->
+            <div class="color-info">
+              <div class="color-details">
+                <div 
+                  class="color-sample" 
+                  :style="{ backgroundColor: '#ff4500' }"
+                ></div>
+                <div class="color-value">#ff4500</div>
+              </div>
+              
+              <div class="color-details">
+                <div 
+                  class="color-sample" 
+                  :style="{ backgroundColor: currentColor }"
+                ></div>
+                <div 
+                  class="color-value"
+                  @click="copyColor"
+                >{{ currentColor }}</div>
+              </div>
+              
+              <div class="color-details">
+                <div 
+                  class="color-sample" 
+                  :style="{ backgroundColor: '#409EFF' }"
+                ></div>
+                <div class="color-value">#409EFF</div>
+              </div>
+            </div>
+            
+            <!-- 操作说明 -->
+            <div class="instruction">
+              <p>点击颜色条或拖动滑块选择渐变中的任何颜色</p>
+              <p>点击颜色值可复制到剪贴板</p>
+            </div>
+          </div>
+          
+          <div class="gradient-section">
+            <h2>如何使用</h2>
+            
+            <div class="features">
+              <div class="feature">
+                <div class="feature-icon">①</div>
+                <h3>点击选择</h3>
+                <p>直接在渐变色条上点击选择位置</p>
+              </div>
+              
+              <div class="feature">
+                <div class="feature-icon">②</div>
+                <h3>拖动滑块</h3>
+                <p>拖动滑块精确定位颜色</p>
+              </div>
+              
+              <div class="feature">
+                <div class="feature-icon">③</div>
+                <h3>复制颜色</h3>
+                <p>点击选中的颜色值进行复制</p>
+              </div>
+              
+              <div class="feature">
+                <div class="feature-icon">④</div>
+                <h3>响应式设计</h3>
+                <p>完美适配各种屏幕尺寸</p>
+              </div>
+            </div>
+            
+            <h2 style="margin-top: 30px;">渐变效果演示</h2>
+            
+            <!-- 渐变示例 -->
+            <div style="margin-top: 20px;">
+              <div 
+                style="width: 200px; height: 20px; margin: 15px auto; border-radius: 5px;"
+                :style="{
+                  background: gradientStyle
+                }"
+              ></div>
+              
+              <div 
+                style="width: 200px; height: 60px; margin: 15px auto; border-radius: 5px; border: 1px solid #eee;"
+                :style="{
+                  background: gradientStyle
+                }"
+              ></div>
+              
+              <div 
+                style="width: 200px; height: 120px; margin: 15px auto; border-radius: 5px;"
+                :style="{
+                  background: `linear-gradient(45deg, ${currentColor}, ${currentColor}60)`
+                }"
+              ></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="footer">
+          <p>基于 Vue3 和 Element-UI 的渐变颜色选择器 | 2023</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed } = Vue;
+    
+    const app = createApp({
+      setup() {
+        // 位置百分比（0-100）
+        const position = ref(50);
+        // 是否正在拖动
+        const isDragging = ref(false);
+        
+        // 起点颜色 (#ff4500) 和终点颜色 (#409EFF)
+        const startColor = '#ff4500';
+        const endColor = '#409EFF';
+        
+        // 计算CSS渐变样式
+        const gradientStyle = computed(() => {
+          return `linear-gradient(to right, ${startColor}, ${endColor})`;
+        });
+        
+        // 计算位置百分比
+        const positionPercentage = computed(() => {
+          return position.value;
+        });
+        
+        // 计算当前颜色（基于线性插值）
+        const currentColor = computed(() => {
+          const percentage = position.value / 100;
+          
+          // 将起始颜色和结束颜色转换为RGB
+          const startRGB = hexToRgb(startColor);
+          const endRGB = hexToRgb(endColor);
+          
+          // 计算插值后的RGB值
+          const r = Math.round(startRGB.r + (endRGB.r - startRGB.r) * percentage);
+          const g = Math.round(startRGB.g + (endRGB.g - startRGB.g) * percentage);
+          const b = Math.round(startRGB.b + (endRGB.b - startRGB.b) * percentage);
+          
+          // 返回十六进制颜色
+          return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+        });
+        
+        // 开始拖动
+        const startDrag = (e) => {
+          isDragging.value = true;
+          e.preventDefault();
+          document.addEventListener('mousemove', handleDrag);
+          document.addEventListener('mouseup', stopDrag);
+        };
+        
+        // 处理拖动
+        const handleDrag = (e) => {
+          if (isDragging.value) {
+            updatePosition(e);
+          }
+        };
+        
+        // 停止拖动
+        const stopDrag = () => {
+          isDragging.value = false;
+          document.removeEventListener('mousemove', handleDrag);
+          document.removeEventListener('mouseup', stopDrag);
+        };
+        
+        // 更新滑块位置
+        const updatePosition = (e) => {
+          const slider = e.currentTarget || e.target;
+          const rect = slider.getBoundingClientRect();
+          const offsetX = e.clientX - rect.left;
+          const newPosition = Math.max(0, Math.min(100, (offsetX / rect.width) * 100));
+          position.value = newPosition;
+        };
+        
+        // 复制颜色到剪贴板
+        const copyColor = async () => {
+          try {
+            await navigator.clipboard.writeText(currentColor.value);
+            const element = document.querySelector('.color-value');
+            const originalText = element.textContent;
+            element.textContent = '已复制!';
+            
+            setTimeout(() => {
+              element.textContent = originalText;
+            }, 2000);
+          } catch (err) {
+            console.error('复制失败:', err);
+          }
+        };
+        
+        // 辅助函数：十六进制转RGB
+        const hexToRgb = (hex) => {
+          const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+          return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+          } : { r: 0, g: 0, b: 0 };
+        };
+        
+        // 辅助函数：将数字转为两位十六进制
+        const toHex = (number) => {
+          const hex = number.toString(16);
+          return hex.length === 1 ? `0${hex}` : hex;
+        };
+        
+        return {
+          position,
+          isDragging,
+          startColor,
+          endColor,
+          gradientStyle,
+          positionPercentage,
+          currentColor,
+          startDrag,
+          updatePosition,
+          copyColor
+        };
+      }
+    });
+    
+    // 使用Element Plus UI（模拟Element-UI）
+    app.config.globalProperties.$ELEMENT = { size: 'medium' };
+    
+    app.mount('#app');
+  </script>
+</body>
+</html>

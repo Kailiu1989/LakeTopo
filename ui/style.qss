@@ -1,0 +1,214 @@
+/* --- ui/style.qss --- */
+
+/* =======================================================
+   全局设置
+   ======================================================= */
+QWidget {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: #ffffff;
+}
+
+QMainWindow {
+    background-color: #050a0c;
+}
+
+/* 主窗口背景图 */
+QWidget#MainCentralWidget {
+    background-color: transparent; /* 背景透明，让下面的地球露出来 */
+}
+/* =======================================================
+   顶部 Header 区域
+   ======================================================= */
+QFrame#HeaderFrame {
+    background-color: rgba(5, 10, 12, 0.85);
+    border-bottom: 1px solid rgba(0, 255, 204, 0.1);
+}
+
+/* --- 顶部导航按钮 --- */
+QPushButton#navButton {
+    /* 未选中状态：加载暗色背景图 */
+    border-image: url(assets/icons/nav_inactive_bg.png) 0 0 0 0 stretch stretch;
+    background-color: transparent;
+    border: none;
+
+    color: #FFFFFF; /* 字体白色 */
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    font-weight: normal;
+    padding-left: 8px;
+    text-align: left;
+    border-radius: 0px;
+}
+
+QPushButton#navButton:hover {
+    color: #00ffcc; /* 悬停微亮 */
+}
+
+QPushButton#navButton:checked {
+    /* 选中状态：加载高亮背景图 */
+    border-image: url(assets/icons/nav_active_bg.png) 0 0 0 0 stretch stretch;
+    background-color: transparent;
+    border: none;
+
+    font-family: "PingFang SC", "Microsoft YaHei";
+    font-weight: 600;
+    font-size: 16px;
+    color: #FFFFFF;
+    padding-left: 10px;
+}
+
+/* =======================================================
+   右上角搜索框
+   ======================================================= */
+/* 搜索框容器背景 (备用) */
+QLineEdit#SearchBar {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid #004d40;
+    border-radius: 18px;
+    color: #ffffff;
+    font-size: 14px;
+    padding-left: 35px;
+}
+
+/* 左侧图标背景 (深绿色) */
+QLabel#SearchIconBg {
+    background-color: #1A5036;
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+}
+
+/* 右侧输入框背景 (渐变绿) */
+QLineEdit#SearchInput {
+    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 rgba(7, 84, 43, 102),
+                                      stop:1 #005A1C);
+    border: none;
+    color: #ffffff;
+    font-size: 14px;
+    padding-left: 10px;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+/* =======================================================
+   侧边栏功能按钮
+   ======================================================= */
+
+/* 1. 金色按钮 (用于 Volume Calculation 页面) */
+QPushButton#sideBtnGold {
+    border-image: url(assets/icons/side_btn_gold.png) 0 0 0 0 stretch stretch;
+    border: none;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 600;
+
+    font-size: 16px; /* 大字体 */
+
+    color: #FFD9BD;
+    text-align: left;
+    padding-left: 60px; /* 避开图标区域 */
+    padding-right: 10px;
+}
+
+/* 2. 青色按钮 (用于 Preprocess 页面) */
+QPushButton#sideBtnCyan {
+    border-image: url(assets/icons/side_btn_cyan.png) 0 0 0 0 stretch stretch;
+    border: none;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-weight: 600;
+
+    font-size: 14px; /* 正常字体 */
+    line-height: 17px;
+
+    color: #FFFFFF;
+    text-align: left;
+    padding-left: 60px; /* 避开图标区域 */
+}
+
+/* =======================================================
+   弹窗样式 (Dialog)
+   ======================================================= */
+/* 背景由 Python 代码控制透明度，这里只负责边框 */
+QFrame#DialogBg {
+    border: 1px solid rgba(47, 59, 62, 0.7);
+    border-radius: 12px;
+}
+
+/* 通用输入框样式 */
+QLineEdit {
+    background-color: rgba(22, 29, 32, 0.8);
+    border-radius: 4px;
+    padding: 0px 12px;
+    font-family: "PingFang SC", "Microsoft YaHei";
+    font-size: 16px; /* 字号与标签保持一致 */
+    font-weight: 600;
+    selection-background-color: #27C77B;
+    selection-color: #ffffff;
+}
+
+/* 金色边框输入框 */
+QLineEdit#InputGold {
+    border: 1px solid #FBDC58;
+    color: #FFFFFF;
+}
+QLineEdit#InputGold:focus {
+    background-color: rgba(36, 32, 16, 0.9);
+}
+
+/* 绿色边框输入框 */
+QLineEdit#InputGreen {
+    border: 1px solid #27C77B;
+    color: #FFFFFF;
+}
+/* 占位符颜色设置 (灰色半透明) */
+QLineEdit#InputGreen::placeholder {
+    color: rgba(255, 255, 255, 0.56);
+    font-family: "PingFang SC", "Microsoft YaHei";
+    font-size: 16px;
+    font-weight: 600;
+}
+QLineEdit#InputGreen:focus {
+    border: 1px solid #00ffcc;
+    background-color: rgba(13, 38, 31, 0.9);
+}
+
+/* 文件夹选择按钮 */
+QPushButton#FolderBtn {
+    background-color: rgba(102, 220, 149, 0.15);
+    border: 1px solid #27C77B;
+    border-radius: 4px;
+}
+QPushButton#FolderBtn:hover {
+    background-color: rgba(102, 220, 149, 0.3);
+    border: 1px solid #00ffcc;
+}
+
+/* =======================================================
+   其他装饰元素
+   ======================================================= */
+/* 二级标题栏 (SUB FUNCTIONS / Date) */
+QFrame#CommonHeaderWidget, QFrame#ChartHeaderWidget {
+    border-image: url(assets/icons/icon_date_arrow.png) 0 0 0 0 stretch stretch;
+    border: none;
+    background: transparent;
+}
+
+QLabel#CommonHeaderLabel, QLabel#ChartHeaderLabel {
+    font-family: "PingFang SC", "Microsoft YaHei";
+    font-weight: 600;
+    font-size: 16px;
+    color: #EFFFF7;
+    background: transparent;
+    border: none;
+    margin: 0px;
+    padding-left: 35px;
+}
+
+/* 日期区域的小按钮 */
+QPushButton#DateSmallBtn {
+    background-color: transparent;
+    border: none;
+}
+QPushButton#DateSmallBtn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
