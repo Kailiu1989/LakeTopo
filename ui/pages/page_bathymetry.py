@@ -161,10 +161,17 @@ class PageBathymetry(QWidget):
             p3 = int(data['interval'])
             p4 = int(data['win_size'])
             p5 = int(data['cell_size'])
+            model_name = data.get('model', 'XGBoost')
             
-            QMessageBox.information(self, "Processing", "Starting depth prediction (ML)...")
-            PredictFunc.runMLProcessing(p1, p2, p3, p4, p5)
-            QMessageBox.information(self, "Success", "Task Completed!")
+            QMessageBox.information(
+                self, "Processing", f"Starting depth prediction with {model_name}..."
+            )
+            mae = PredictFunc.runMLProcessing(p1, p2, p3, p4, p5, model_name)
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Task Completed!\nModel: {model_name}\nHoldout MAE: {mae:.4f}",
+            )
         except Exception as e:
             raise Exception(f"Depth prediction failed: {e}")
 

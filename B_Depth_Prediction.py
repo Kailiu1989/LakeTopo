@@ -1,15 +1,17 @@
 import xgboost as xgb
 import pandas as pd
 import numpy as np
-from xgboost import plot_importance
-from xgboost import plot_tree
 import Common_Function as cf
 import os
 import csv
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import mean_absolute_error
+from sklearn.ensemble import RandomForestRegressor
 from osgeo import ogr
+
+
+MODEL_CHOICES = ("XGBoost", "Random Forest", "LightGBM")
 
 def _with_sep(path):
     return os.path.normpath(path) + os.sep
@@ -62,65 +64,142 @@ def MLdataProcessing(_trainingData, _testData):
         f_csv.writerow(headers)
         f_csv.writerows(data)
 
-# 使用XGBoost进行训练和预测
-def XGBoost(_trainingData, _testData, _predictedData):
-    data = pd.read_csv(_trainingData)
+def _normalize_model_name(model_name):
+    normalized = str(model_name or "XGBoost").strip().lower().replace("_", " ")
+    aliases = {
+        "xgb": "XGBoost",
+        "xgboost": "XGBoost",
+        "rf": "Random Forest",
+        "rs": "Random Forest",
+        "random forest": "Random Forest",
+        "randomforest": "Random Forest",
+        "lgbm": "LightGBM",
+        "light gbm": "LightGBM",
+        "lightgbm": "LightGBM",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported model '{model_name}'. Choose one of: {', '.join(MODEL_CHOICES)}"
+        )
+    return aliases[normalized]
 
-    test_data = data.sample(
-        frac=0.3,
-        replace=False,
+
+def _model_and_grid(model_name):
+    threads = _xgb_thread_count()
+    if model_name == "XGBoost":
+        model = xgb.XGBRegressor(
+            objective="reg:squarederror", random_state=42, n_jobs=threads
+        )
+        grid = {
+            "learning_rate": [0.01, 0.05, 0.1],
+            "n_estimators": [1000],
+            "max_depth": [3, 6, 7],
+            "min_child_weight": [3, 5, 6],
+            "subsample": [0.6, 0.7, 0.8],
+            "colsample_bytree": [0.6, 0.7, 0.8],
+            "gamma": [0.2],
+        }
+        return model, grid
+
+    if model_name == "Random Forest":
+        model = RandomForestRegressor(random_state=42, n_jobs=threads)
+        grid = {
+            "n_estimators": [300],
+            "max_depth": [None, 10, 20],
+            "min_samples_split": [2, 5],
+            "min_samples_leaf": [1, 2],
+            "max_features": ["sqrt", 0.8],
+        }
+        return model, grid
+
+    try:
+        from lightgbm import LGBMRegressor
+    except ImportError as exc:
+        raise RuntimeError(
+            "LightGBM is not installed. Install the 'lightgbm' package and rebuild LakeTopo."
+        ) from exc
+    model = LGBMRegressor(
+        objective="regression",
         random_state=42,
-        axis=0
+        n_jobs=threads,
+        verbosity=-1,
+        subsample_freq=1,
+    )
+    grid = {
+        "learning_rate": [0.03, 0.05, 0.1],
+        "n_estimators": [500],
+        "num_leaves": [15, 31, 63],
+        "max_depth": [-1, 10],
+        "min_child_samples": [10, 20],
+        "subsample": [0.8],
+        "colsample_bytree": [0.8],
+    }
+    return model, grid
+
+
+def train_and_predict(model_name, training_data, test_data, predicted_data):
+    """Train the selected regressor, report holdout MAE, and predict the lake grid."""
+    model_name = _normalize_model_name(model_name)
+    data = pd.read_csv(training_data)
+    if "ele" not in data.columns:
+        raise ValueError("Training data must contain an 'ele' target column.")
+    if len(data) < 6:
+        raise ValueError("At least 6 training samples are required for model validation.")
+
+    feature_names = [column for column in data.columns if column != "ele"]
+    data = data[feature_names + ["ele"]].apply(pd.to_numeric, errors="raise")
+    prediction_features = pd.read_csv(test_data)
+    missing = [name for name in feature_names if name not in prediction_features.columns]
+    if missing:
+        raise ValueError(f"Prediction data is missing fields: {', '.join(missing)}")
+    prediction_features = prediction_features[feature_names].apply(
+        pd.to_numeric, errors="raise"
     )
 
-    train_data = data.drop(test_data.index)
-
-    X_train = train_data.drop('ele', axis=1)
-    X_test = test_data.drop('ele', axis=1)
-
-    y_train = train_data['ele']
-    y_test = test_data['ele']
-
-    # 定义XGBoost模型
-    model = xgb.XGBRegressor(objective='reg:squarederror', seed=42, n_jobs=_xgb_thread_count())
-
-    # 设定网格搜索的参数范围
-    param_grid = {
-        'learning_rate': [0.01, 0.05, 0.1],
-        'n_estimators': [1000],
-        'max_depth': [3, 6, 7],
-        'min_child_weight': [6, 3, 5],
-        'subsample': [0.6, 0.7, 0.8],
-        'colsample_bytree': [0.6, 0.7, 0.8],
-        'gamma': [ 0.2]
-    }
-
-    # 使用GridSearchCV进行超参数调优
-    grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=3, verbose=0, n_jobs=1)
+    X_train, X_holdout, y_train, y_holdout = train_test_split(
+        data[feature_names],
+        data["ele"],
+        test_size=0.3,
+        random_state=42,
+    )
+    model, param_grid = _model_and_grid(model_name)
+    cv_folds = min(3, len(X_train))
+    if cv_folds < 2:
+        raise ValueError("Not enough training samples for cross-validation.")
+    grid_search = GridSearchCV(
+        estimator=model,
+        param_grid=param_grid,
+        cv=cv_folds,
+        scoring="neg_mean_absolute_error",
+        verbose=0,
+        n_jobs=1,
+        error_score="raise",
+    )
     grid_search.fit(X_train, y_train)
 
-    # 打印最优参数
-    print(f"Best parameters: {grid_search.best_params_}")
-
-    # 使用最佳参数训练模型
     best_model = grid_search.best_estimator_
-    ans = best_model.predict(X_test)
+    holdout_prediction = best_model.predict(X_holdout)
+    mae = float(mean_absolute_error(y_holdout, holdout_prediction))
+    prediction = best_model.predict(prediction_features)
+    pd.DataFrame({"ele": prediction}).to_csv(
+        predicted_data, index=False, encoding="utf-8"
+    )
+    print(f"Model = {model_name}")
+    print(f"Best parameters = {grid_search.best_params_}")
+    print(f"Holdout MAE = {mae}")
+    return mae
 
-    # 计算MAE
-    mae = mean_absolute_error(y_test, ans)
-    print(f"MAE = {mae}")
 
-    # 对测试数据进行预测
-    pred_data = pd.read_csv(_testData)
-    index = pred_data.index
-    pred = best_model.predict(pred_data)
+def XGBoost(_trainingData, _testData, _predictedData):
+    return train_and_predict("XGBoost", _trainingData, _testData, _predictedData)
 
-    # 保存预测结果到CSV文件
-    result_reg = pd.DataFrame(index)
-    result_reg['ele'] = pred
-    result_reg.to_csv(_predictedData, encoding='gb2312')
 
-    return mae  # 返回MAE
+def RandomForest(_trainingData, _testData, _predictedData):
+    return train_and_predict("Random Forest", _trainingData, _testData, _predictedData)
+
+
+def LightGBM(_trainingData, _testData, _predictedData):
+    return train_and_predict("LightGBM", _trainingData, _testData, _predictedData)
 
 # 处理结果数据
 def results_processing(_workSP, _para_interval, lake_name):
@@ -138,12 +217,15 @@ def results_processing(_workSP, _para_interval, lake_name):
             CoordXY.append((float(row[2]), float(row[3])))  # 假设坐标在第三列和第四列
 
     # 读取预测值
-    Ele = []
-    with open(predictedEleFile, 'r') as f:
-        rows = csv.reader(f)
-        next(rows)  # Skip header row
-        for r in rows:
-            Ele.append(str(r[2]))  # 假设预测值在第三列
+    with open(predictedEleFile, 'r', encoding='utf-8') as f:
+        rows = csv.DictReader(f)
+        if not rows.fieldnames or 'ele' not in rows.fieldnames:
+            raise ValueError(f"Prediction output has no 'ele' column: {predictedEleFile}")
+        Ele = [str(row['ele']) for row in rows]
+    if len(Ele) != len(CoordXY):
+        raise ValueError(
+            f"Prediction count ({len(Ele)}) does not match point count ({len(CoordXY)})."
+        )
 
     # 合并坐标和预测值，写入到新的文本文件
     mergedList = []
@@ -205,7 +287,7 @@ def results_processing(_workSP, _para_interval, lake_name):
     print(f"Shapefile created at {shpFile}")
 
 # 调用函数
-def runMLProcessing(param1, param2, param3, param4, param5):
+def runMLProcessing(param1, param2, param3, param4, param5, model_name="XGBoost"):
     print('++++++++++++++++start+++++++++++++++++++++')
 
     ############## 输入数据 ####################
@@ -214,6 +296,7 @@ def runMLProcessing(param1, param2, param3, param4, param5):
     intervalList = [param3]  # 生成的预测点间隔
     para_Window = param4  # 窗口大小
     para_cellsize = param5  # 处理的像元大小
+    model_name = _normalize_model_name(model_name)
     ############## 输入数据 ####################
 
     for lakeIndex in range(0, len(lakeName)):
@@ -232,5 +315,6 @@ def runMLProcessing(param1, param2, param3, param4, param5):
             MLdataProcessing(trainingData, testData)
             trainingData = MLDir + "Training.csv"
             testData = MLDir + "Test_" + str(intervalList[intervalIndex]) + ".csv"
-            XGBoost(trainingData, testData, PredictedData)
+            mae = train_and_predict(model_name, trainingData, testData, PredictedData)
             results_processing(dataDir, intervalList[intervalIndex], lakeName[lakeIndex])  # 生成shp文件
+    return mae

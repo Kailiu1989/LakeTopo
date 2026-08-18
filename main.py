@@ -17,7 +17,10 @@ def run_packaging_smoke_test(raster_paths=()):
         # import order as an interactive raster load.
         from ui.main_window import MainWindow  # noqa: F401
         from cesiumTool.startCesium import prepare_raster_for_cesium
+        import lightgbm
         import numpy as np
+        import sklearn
+        import xgboost
         from osgeo import gdal, gdal_array, osr
 
         gdal.UseExceptions()
@@ -71,6 +74,9 @@ def run_packaging_smoke_test(raster_paths=()):
             "PASS\n"
             f"GDAL={gdal.VersionInfo()}\n"
             f"NumPy={np.__version__}\n"
+            f"XGBoost={xgboost.__version__}\n"
+            f"scikit-learn={sklearn.__version__}\n"
+            f"LightGBM={lightgbm.__version__}\n"
             f"PROJ_DATA={os.environ.get('PROJ_DATA', '')}\n"
             f"Warp={warped.RasterXSize}x{warped.RasterYSize}\n"
             f"CesiumPreview={preview['width']}x{preview['height']}\n"

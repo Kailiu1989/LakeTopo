@@ -31,8 +31,8 @@ class BathymetryDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # 1. 强制固定窗口大小
-        self.setFixedSize(660, 430)
+        # Depth prediction has one additional model selector.
+        self.setFixedSize(660, 500 if self.mode == "pred_depth" else 430)
 
         self.dragPos = QPoint()
         self.widgets = {} 
@@ -169,6 +169,11 @@ class BathymetryDialog(QDialog):
             if self.mode == "pred_loc":
                 self.widgets['dem_path'] = self.create_input_row("Input DEM:", "Select .tif...", browse=True)
                 self.widgets['survey_path'] = self.create_input_row("In-situ Bath Points:", "Select .shp...", browse=True)
+            else:
+                self.widgets['model'] = self.create_combo_row(
+                    "Prediction Model:",
+                    ["XGBoost", "Random Forest", "LightGBM"]
+                )
             self.widgets['interval'] = self.create_input_row("Interval (m):", "5", style="Gold", is_value=True)
             self.widgets['win_size'] = self.create_input_row("Window Size:", "5", style="Gold", is_value=True)
             self.widgets['cell_size'] = self.create_input_row("Cell Size (m):", "90", style="Gold", is_value=True)

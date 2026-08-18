@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-python -c "import PyInstaller, numpy; from osgeo import gdal, gdal_array; from PyQt5 import QtWebEngineWidgets"
+python -c "import PyInstaller, numpy, lightgbm; from osgeo import gdal, gdal_array; from PyQt5 import QtWebEngineWidgets; from sklearn.ensemble import RandomForestRegressor"
 if errorlevel 1 (
     echo.
     echo Build environment check failed.
