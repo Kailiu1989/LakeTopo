@@ -13,6 +13,12 @@ from osgeo import ogr
 
 MODEL_CHOICES = ("XGBoost", "Random Forest", "LightGBM")
 
+
+def _report_progress(progress_callback, value, message):
+    """Report bounded integer progress without coupling the backend to Qt."""
+    if progress_callback is not None:
+        progress_callback(max(0, min(100, int(value))), message)
+
 def _with_sep(path):
     return os.path.normpath(path) + os.sep
 
@@ -137,9 +143,16 @@ def _model_and_grid(model_name):
     return model, grid
 
 
-def train_and_predict(model_name, training_data, test_data, predicted_data):
+def train_and_predict(
+    model_name,
+    training_data,
+    test_data,
+    predicted_data,
+    progress_callback=None,
+):
     """Train the selected regressor, report holdout MAE, and predict the lake grid."""
     model_name = _normalize_model_name(model_name)
+    _report_progress(progress_callback, 28, "Loading model training and prediction data…")
     data = pd.read_csv(training_data)
     if "ele" not in data.columns:
         raise ValueError("Training data must contain an 'ele' target column.")
@@ -175,11 +188,19 @@ def train_and_predict(model_name, training_data, test_data, predicted_data):
         n_jobs=1,
         error_score="raise",
     )
+    combination_count = int(np.prod([len(values) for values in param_grid.values()]))
+    _report_progress(
+        progress_callback,
+        42,
+        f"Optimizing {model_name} ({combination_count} parameter combinations)…",
+    )
     grid_search.fit(X_train, y_train)
 
+    _report_progress(progress_callback, 82, "Evaluating the selected model…")
     best_model = grid_search.best_estimator_
     holdout_prediction = best_model.predict(X_holdout)
     mae = float(mean_absolute_error(y_holdout, holdout_prediction))
+    _report_progress(progress_callback, 87, "Predicting bathymetry depths…")
     prediction = best_model.predict(prediction_features)
     pd.DataFrame({"ele": prediction}).to_csv(
         predicted_data, index=False, encoding="utf-8"
@@ -202,13 +223,20 @@ def LightGBM(_trainingData, _testData, _predictedData):
     return train_and_predict("LightGBM", _trainingData, _testData, _predictedData)
 
 # 处理结果数据
-def results_processing(_workSP, _para_interval, lake_name):
+def results_processing(
+    _workSP,
+    _para_interval,
+    lake_name,
+    progress_callback=None,
+    survey_file=None,
+):
     # 假设处理结果文件路径和湖泊 Survey 文件路径
     predictedEleFile = _workSP + "temp_ML\\Predicted_" + str(_para_interval) + ".csv"
     sourceDataFile = _workSP + "MLData\\Test_" + str(_para_interval) + ".txt"
     processedFile = _workSP + "temp_ML\\PredictedPoints_" + str(_para_interval) + ".txt"
     shpFile = _workSP + "temp_ML\\PredictedPoints_" + str(_para_interval) + ".shp"  # 输出shp文件路径
 
+    _report_progress(progress_callback, 91, "Preparing predicted point coordinates…")
     # 读取源数据的坐标
     CoordXY = []
     with open(sourceDataFile, 'r') as f:
@@ -241,15 +269,25 @@ def results_processing(_workSP, _para_interval, lake_name):
     if driver is None:
         raise Exception("Shapefile driver not available.")
 
-    # 使用lakeName_Survey.shp来获取坐标系
-    surveyShpPath = _workSP + str(lake_name) + "_Survey.shp"
+    # 使用用户选择的实测点 SHP 获取坐标系；未传入时保留旧命名规则兼容旧入口。
+    surveyShpPath = (
+        os.path.normpath(survey_file)
+        if survey_file
+        else _workSP + str(lake_name) + "_Survey.shp"
+    )
     survey_ds = ogr.Open(surveyShpPath)
     if survey_ds is None:
         raise Exception(f"Failed to open the shapefile: {surveyShpPath}")
     survey_layer = survey_ds.GetLayer()
+    if survey_layer is None:
+        raise ValueError(f"The survey shapefile contains no readable layer: {surveyShpPath}")
 
     # 获取原始shp的投影
     spatial_ref = survey_layer.GetSpatialRef()
+    if spatial_ref is None:
+        raise ValueError(
+            f"The survey shapefile has no spatial reference (.prj): {surveyShpPath}"
+        )
 
     # 创建新的shp文件
     out_ds = driver.CreateDataSource(shpFile)
@@ -261,7 +299,9 @@ def results_processing(_workSP, _para_interval, lake_name):
     out_layer.CreateField(ogr.FieldDefn("Depth", ogr.OFTString))  # 预测值
 
     # 遍历合并后的数据并写入shp
-    for i in range(len(CoordXY)):
+    feature_count = len(CoordXY)
+    last_percent = -1
+    for i in range(feature_count):
         x = CoordXY[i][0]
         y = CoordXY[i][1]
         ele = Ele[i]
@@ -280,6 +320,15 @@ def results_processing(_workSP, _para_interval, lake_name):
         # 将特征写入图层
         out_layer.CreateFeature(feature)
 
+        percent = 94 + int(5 * (i + 1) / max(1, feature_count))
+        if percent != last_percent:
+            _report_progress(
+                progress_callback,
+                percent,
+                f"Writing predicted depths ({i + 1}/{feature_count} points)…",
+            )
+            last_percent = percent
+
     # 清理
     out_ds = None
     survey_ds = None
@@ -287,8 +336,18 @@ def results_processing(_workSP, _para_interval, lake_name):
     print(f"Shapefile created at {shpFile}")
 
 # 调用函数
-def runMLProcessing(param1, param2, param3, param4, param5, model_name="XGBoost"):
+def runMLProcessing(
+    param1,
+    param2,
+    param3,
+    param4,
+    param5,
+    model_name="XGBoost",
+    progress_callback=None,
+    survey_file=None,
+):
     print('++++++++++++++++start+++++++++++++++++++++')
+    _report_progress(progress_callback, 0, "Preparing depth prediction…")
 
     ############## 输入数据 ####################
     workSPDir, resolved_lake = _resolve_workspace(param1, param2)
@@ -304,6 +363,7 @@ def runMLProcessing(param1, param2, param3, param4, param5, model_name="XGBoost"
         dataDir = workSPDir
         MLDir = dataDir + "MLData\\"
         tempDir = dataDir + "temp_ML\\"
+        _report_progress(progress_callback, 7, "Preparing model output folder…")
         if os.path.exists(tempDir):
             cf.del_file(tempDir)
         else:
@@ -312,9 +372,23 @@ def runMLProcessing(param1, param2, param3, param4, param5, model_name="XGBoost"
             trainingData = MLDir + "Training.txt"  # 训练数据路径
             testData = MLDir + "Test_" + str(intervalList[intervalIndex]) + ".txt"  # 测试数据路径
             PredictedData = tempDir + "Predicted_" + str(intervalList[intervalIndex]) + ".csv"  # 生成预测点csv文件
+            _report_progress(progress_callback, 15, "Converting model input data…")
             MLdataProcessing(trainingData, testData)
             trainingData = MLDir + "Training.csv"
             testData = MLDir + "Test_" + str(intervalList[intervalIndex]) + ".csv"
-            mae = train_and_predict(model_name, trainingData, testData, PredictedData)
-            results_processing(dataDir, intervalList[intervalIndex], lakeName[lakeIndex])  # 生成shp文件
+            mae = train_and_predict(
+                model_name,
+                trainingData,
+                testData,
+                PredictedData,
+                progress_callback,
+            )
+            results_processing(
+                dataDir,
+                intervalList[intervalIndex],
+                lakeName[lakeIndex],
+                progress_callback,
+                survey_file=survey_file,
+            )  # 生成shp文件
+    _report_progress(progress_callback, 100, "Depth prediction completed.")
     return mae

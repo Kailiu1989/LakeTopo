@@ -10,6 +10,7 @@ pyqtgraph>=0.13.3
 
 # numpy 用于生成图表测试数据及后续科学计算
 numpy>=1.24.0
+scipy>=1.10.0
 
 #其余必备依赖
 xgboost>=2.1.4

@@ -268,6 +268,8 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def closeEvent(self, event):
+        if hasattr(self, 'page_bathymetry') and hasattr(self.page_bathymetry, 'shutdown'):
+            self.page_bathymetry.shutdown()
         if hasattr(self, 'page_volume') and hasattr(self.page_volume, 'shutdown'):
             self.page_volume.shutdown()
         if hasattr(self, 'webViewer'):

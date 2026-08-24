@@ -19,9 +19,13 @@ def run_packaging_smoke_test(raster_paths=()):
         from cesiumTool.startCesium import prepare_raster_for_cesium
         import lightgbm
         import numpy as np
+        import scipy
         import sklearn
         import xgboost
         from osgeo import gdal, gdal_array, osr
+        from scipy.interpolate import griddata
+        from scipy.ndimage import gaussian_filter
+        from scipy.spatial import cKDTree
 
         gdal.UseExceptions()
         dataset = gdal.GetDriverByName("MEM").Create("", 3, 2, 1, gdal.GDT_Float32)
@@ -51,6 +55,27 @@ def run_packaging_smoke_test(raster_paths=()):
         if warped is None or warped.ReadAsArray() is None:
             raise RuntimeError("GDAL WGS84 warp returned no raster data")
 
+        # Exercise the SciPy functions used by prediction-point lookup and
+        # terrain generation so missing native DLLs fail during packaging.
+        sample_xy = np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            dtype=np.float64,
+        )
+        tree_distance, tree_index = cKDTree(sample_xy).query([0.9, 0.9])
+        if int(tree_index) != 3 or not np.isfinite(tree_distance):
+            raise RuntimeError("SciPy cKDTree returned an invalid nearest point")
+        interpolated = griddata(
+            sample_xy,
+            np.array([0.0, 1.0, 1.0, 2.0]),
+            np.array([[0.5, 0.5]]),
+            method="linear",
+        )
+        if interpolated is None or not np.all(np.isfinite(interpolated)):
+            raise RuntimeError("SciPy griddata returned an invalid interpolation")
+        smoothed = gaussian_filter(np.arange(9, dtype=np.float64).reshape(3, 3), 1.0)
+        if smoothed.shape != (3, 3) or not np.all(np.isfinite(smoothed)):
+            raise RuntimeError("SciPy gaussian_filter returned an invalid surface")
+
         with tempfile.TemporaryDirectory(prefix="laketopo-raster-smoke-") as temp_dir:
             raster_path = Path(temp_dir) / "projected-dem.tif"
             disk_dataset = gdal.GetDriverByName("GTiff").Create(
@@ -74,12 +99,16 @@ def run_packaging_smoke_test(raster_paths=()):
             "PASS\n"
             f"GDAL={gdal.VersionInfo()}\n"
             f"NumPy={np.__version__}\n"
+            f"SciPy={scipy.__version__}\n"
             f"XGBoost={xgboost.__version__}\n"
             f"scikit-learn={sklearn.__version__}\n"
             f"LightGBM={lightgbm.__version__}\n"
             f"PROJ_DATA={os.environ.get('PROJ_DATA', '')}\n"
             f"Warp={warped.RasterXSize}x{warped.RasterYSize}\n"
             f"CesiumPreview={preview['width']}x{preview['height']}\n"
+            f"SciPyKDTree={int(tree_index)}|{float(tree_distance):.6f}\n"
+            f"SciPyGriddata={float(interpolated[0]):.6f}\n"
+            f"SciPyGaussian={float(smoothed[1, 1]):.6f}\n"
             f"gdal_array={gdal_array.__file__}\n"
             + ("\n".join(raster_results) + "\n" if raster_results else "")
         )

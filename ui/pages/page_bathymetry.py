@@ -5,8 +5,18 @@ import numpy as np
 from osgeo import gdal, ogr, osr, gdalconst
 import Common_Function as cf
 
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QFrame, QApplication, QScrollArea, QMessageBox)
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QPushButton,
+    QFrame,
+    QApplication,
+    QScrollArea,
+    QMessageBox,
+    QProgressDialog,
+)
+from PyQt5.QtCore import Qt, QObject, QThread, pyqtSignal
 
 # 引入您原有的业务逻辑模块 (请确保这些文件存在)
 try:
@@ -21,10 +31,73 @@ try:
 except ImportError:
     pass
 
+
+class PredictionWorker(QObject):
+    """Run long-running bathymetry tasks away from the GUI thread."""
+
+    progress = pyqtSignal(int, str)
+    finished = pyqtSignal(str, object)
+    failed = pyqtSignal(str, str)
+
+    def __init__(self, mode, params):
+        super().__init__()
+        self.mode = mode
+        self.params = params
+
+    def _report_progress(self, value, message):
+        self.progress.emit(int(value), str(message))
+
+    def run(self):
+        try:
+            if self.mode == "pred_loc":
+                mainFunc.runPredictedPoints(
+                    self.params["work_path"],
+                    self.params["lake_name"],
+                    self.params["interval"],
+                    self.params["win_size"],
+                    self.params["cell_size"],
+                    None,
+                    self.params["survey_path"],
+                    progress_callback=self._report_progress,
+                    lake_polygon_file=self.params["lake_polygon_path"],
+                )
+                result = None
+            elif self.mode == "pred_depth":
+                result = PredictFunc.runMLProcessing(
+                    self.params["work_path"],
+                    self.params["lake_name"],
+                    self.params["interval"],
+                    self.params["win_size"],
+                    self.params["cell_size"],
+                    self.params["model"],
+                    progress_callback=self._report_progress,
+                    survey_file=self.params["survey_path"],
+                )
+            elif self.mode == "terrain":
+                result = DEMFunc.runLakeDEM(
+                    self.params["depth_shp"],
+                    self.params["z_field"],
+                    self.params["breakline"],
+                    self.params["polygon"],
+                    self.params["out_dem"],
+                    self.params["resolution"],
+                    progress_callback=self._report_progress,
+                )
+            else:
+                raise ValueError(f"Unsupported prediction task: {self.mode}")
+            self.finished.emit(self.mode, result)
+        except Exception as exc:
+            self.failed.emit(self.mode, str(exc))
+
 class PageBathymetry(QWidget):
     def __init__(self):
         super().__init__()
         self.side_buttons = []
+        self._prediction_thread = None
+        self._prediction_worker = None
+        self._prediction_progress = None
+        self._prediction_model = None
+        self._prediction_outcome = None
         self.init_ui()
 
     def init_ui(self):
@@ -133,23 +206,54 @@ class PageBathymetry(QWidget):
             p3 = int(data['interval'])
             p4 = int(data['win_size'])
             p5 = int(data['cell_size'])
-            p6 = data.get('dem_path', '').strip()
+            p6 = data.get('lake_polygon_path', '').strip()
             p7 = data.get('survey_path', '').strip()
 
-            if p6 and not os.path.exists(p6):
-                QMessageBox.warning(self, "Error", "Input DEM file not found.")
+            if not os.path.isdir(p1):
+                QMessageBox.warning(self, "Error", "Workspace directory not found.")
                 return
-            if p7 and not os.path.exists(p7):
+            if not p6 or not os.path.isfile(p6):
+                QMessageBox.warning(self, "Error", "Lake polygon SHP file not found.")
+                return
+            if not p7 or not os.path.isfile(p7):
                 QMessageBox.warning(self, "Error", "In-situ bath points file not found.")
                 return
-            ok, message = cf.check_spatial_references_match([p for p in (p6, p7) if p])
+
+            resolved_workspace, resolved_lake = mainFunc._resolve_workspace(p1, p2)
+            default_dem = mainFunc._resolve_dem_file(
+                resolved_workspace, resolved_lake
+            )
+            if not os.path.isfile(default_dem):
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Default DEM file not found: {default_dem}\n"
+                    "Gen. Prediction Points expects <lake>_merit.tif in the workspace.",
+                )
+                return
+
+            ok, message = cf.check_spatial_references_match(
+                [default_dem, p6, p7]
+            )
             if not ok:
                 QMessageBox.warning(self, "Projection Mismatch", message)
                 return
-            
-            QMessageBox.information(self, "Processing", "Starting prediction points generation...")
-            mainFunc.runPredictedPoints(p1, p2, p3, p4, p5, p6 or None, p7 or None)
-            QMessageBox.information(self, "Success", "Task Completed!")
+
+            params = {
+                "work_path": p1,
+                "lake_name": p2,
+                "interval": p3,
+                "win_size": p4,
+                "cell_size": p5,
+                "lake_polygon_path": p6,
+                "survey_path": p7,
+            }
+            self._start_prediction_task(
+                "pred_loc",
+                params,
+                "Prediction Point Generation",
+                "Preparing prediction-point generation…",
+            )
         except Exception as e:
             raise Exception(f"Prediction points failed: {e}")
 
@@ -162,36 +266,189 @@ class PageBathymetry(QWidget):
             p4 = int(data['win_size'])
             p5 = int(data['cell_size'])
             model_name = data.get('model', 'XGBoost')
-            
-            QMessageBox.information(
-                self, "Processing", f"Starting depth prediction with {model_name}..."
-            )
-            mae = PredictFunc.runMLProcessing(p1, p2, p3, p4, p5, model_name)
-            QMessageBox.information(
-                self,
-                "Success",
-                f"Task Completed!\nModel: {model_name}\nHoldout MAE: {mae:.4f}",
+            survey_path = data.get('survey_path', '').strip()
+
+            if not os.path.isdir(p1):
+                QMessageBox.warning(self, "Error", "Workspace directory not found.")
+                return
+            if not survey_path or not os.path.isfile(survey_path):
+                QMessageBox.warning(self, "Error", "In-situ bath points file not found.")
+                return
+
+            params = {
+                "work_path": p1,
+                "lake_name": p2,
+                "interval": p3,
+                "win_size": p4,
+                "cell_size": p5,
+                "model": model_name,
+                "survey_path": survey_path,
+            }
+            self._start_prediction_task(
+                "pred_depth",
+                params,
+                "Prediction Depth Generation",
+                f"Preparing depth prediction with {model_name}…",
             )
         except Exception as e:
             raise Exception(f"Depth prediction failed: {e}")
 
+    def _start_prediction_task(self, mode, params, title, initial_message):
+        if self._prediction_thread is not None and self._prediction_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Processing",
+                "A bathymetry prediction task is already running.",
+            )
+            return
+
+        self._prediction_model = params.get("model") if mode == "pred_depth" else None
+        self._prediction_progress = QProgressDialog(
+            initial_message, None, 0, 100, self.window()
+        )
+        self._prediction_progress.setWindowTitle(title)
+        self._prediction_progress.setWindowModality(Qt.WindowModal)
+        self._prediction_progress.setAutoClose(False)
+        self._prediction_progress.setAutoReset(False)
+        self._prediction_progress.setMinimumDuration(0)
+        self._prediction_progress.setMinimumWidth(460)
+        self._prediction_progress.setValue(0)
+
+        self._prediction_thread = QThread(self)
+        self._prediction_worker = PredictionWorker(mode, params)
+        self._prediction_worker.moveToThread(self._prediction_thread)
+        self._prediction_thread.started.connect(self._prediction_worker.run)
+        self._prediction_worker.progress.connect(self._update_prediction_progress)
+        self._prediction_worker.finished.connect(self._queue_prediction_success)
+        self._prediction_worker.failed.connect(self._queue_prediction_failure)
+        self._prediction_worker.finished.connect(self._prediction_worker.deleteLater)
+        self._prediction_worker.failed.connect(self._prediction_worker.deleteLater)
+        self._prediction_worker.finished.connect(self._prediction_thread.quit)
+        self._prediction_worker.failed.connect(self._prediction_thread.quit)
+        self._prediction_thread.finished.connect(self._on_prediction_thread_finished)
+        self._prediction_thread.start()
+
+    def _update_prediction_progress(self, value, message):
+        if self._prediction_progress is not None:
+            self._prediction_progress.setLabelText(message)
+            self._prediction_progress.setValue(max(0, min(100, int(value))))
+
+    def _close_prediction_progress(self):
+        if self._prediction_progress is not None:
+            self._prediction_progress.close()
+            self._prediction_progress.deleteLater()
+            self._prediction_progress = None
+
+    def _queue_prediction_success(self, mode, result):
+        """Save the result; user dialogs are shown only after QThread has stopped."""
+        self._prediction_outcome = ("success", mode, result)
+        if self._prediction_progress is not None:
+            self._prediction_progress.setLabelText("Finalizing the task…")
+            self._prediction_progress.setValue(100)
+
+    def _queue_prediction_failure(self, mode, message):
+        """Save the error; user dialogs are shown only after QThread has stopped."""
+        self._prediction_outcome = ("failure", mode, message)
+        if self._prediction_progress is not None:
+            self._prediction_progress.setLabelText("Finalizing the task…")
+
+    def _on_prediction_thread_finished(self):
+        """Release thread-owned objects before opening a modal result dialog."""
+        thread = self._prediction_thread
+        outcome = self._prediction_outcome
+        model_name = self._prediction_model
+
+        self._close_prediction_progress()
+        self._prediction_worker = None
+        self._prediction_thread = None
+        self._prediction_model = None
+        self._prediction_outcome = None
+        if thread is not None:
+            thread.deleteLater()
+
+        if outcome is None:
+            return
+
+        status, mode, result = outcome
+        if status == "failure":
+            prefix = {
+                "pred_loc": "Prediction points failed",
+                "pred_depth": "Depth prediction failed",
+                "terrain": "Terrain generation failed",
+            }.get(mode, "Bathymetry task failed")
+            QMessageBox.critical(self, "Execution Error", f"{prefix}: {result}")
+        elif mode == "pred_depth":
+            QMessageBox.information(
+                self,
+                "Success",
+                "Task Completed!\n"
+                f"Model: {model_name or 'Unknown'}\n"
+                f"Holdout MAE: {float(result):.4f}",
+            )
+        elif mode == "terrain":
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Terrain DEM generated successfully!\nOutput: {result}",
+            )
+        else:
+            QMessageBox.information(self, "Success", "Task Completed!")
+
+    def shutdown(self):
+        """Wait for an active prediction task before destroying the page."""
+        if self._prediction_thread is not None and self._prediction_thread.isRunning():
+            self._prediction_thread.quit()
+            self._prediction_thread.wait()
+        self._prediction_outcome = None
+        self._close_prediction_progress()
+
     def logic_terrain(self, data):
         """水下地形生成"""
         try:
-            p1 = data['depth_shp']
-            p2 = data['z_field']
-            p3 = data['breakline']
-            p4 = data['polygon']
-            p5 = data['out_dem']
-            p6 = data['resolution']
+            p1 = data['depth_shp'].strip()
+            p2 = data['z_field'].strip()
+            p3 = data['breakline'].strip()
+            p4 = data['polygon'].strip()
+            p5 = data['out_dem'].strip()
+            p6 = float(data['resolution'])
+
+            required_files = {
+                "Depth points SHP": p1,
+                "Shoreline SHP": p3,
+                "Lake polygon SHP": p4,
+            }
+            for label, path in required_files.items():
+                if not path or not os.path.isfile(path):
+                    QMessageBox.warning(self, "Error", f"{label} file not found.")
+                    return
+            if not p2:
+                QMessageBox.warning(self, "Error", "Z field name is required.")
+                return
+            if not p5:
+                QMessageBox.warning(self, "Error", "Output DEM path is required.")
+                return
+            if p6 <= 0:
+                QMessageBox.warning(self, "Error", "Resolution must be greater than zero.")
+                return
+
             ok, message = cf.check_spatial_references_match([p1, p3, p4])
             if not ok:
                 QMessageBox.warning(self, "Projection Mismatch", message)
                 return
-            
-            QMessageBox.information(self, "Processing", "Starting DEM construction...")
-            DEMFunc.runLakeDEM(p1, p2, p3, p4, p5, p6)
-            QMessageBox.information(self, "Success", "DEM Generated successfully!")
+
+            self._start_prediction_task(
+                "terrain",
+                {
+                    "depth_shp": p1,
+                    "z_field": p2,
+                    "breakline": p3,
+                    "polygon": p4,
+                    "out_dem": p5,
+                    "resolution": p6,
+                },
+                "Terrain Generation",
+                "Preparing terrain DEM generation…",
+            )
         except Exception as e:
             raise Exception(f"Terrain generation failed: {e}")
 

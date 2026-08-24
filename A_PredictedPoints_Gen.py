@@ -7,9 +7,80 @@ from osgeo import gdal, ogr, osr
 import os
 from collections import Counter
 
+try:
+    from scipy.spatial import cKDTree
+except ImportError:
+    cKDTree = None
+
 # 避免除零错误
 EPS = 0.0001
 # para_cellsize = 90 #处理的像元大小（由 runPredictedPoints 传入并设为全局）
+
+
+def _report_progress(progress_callback, value, message):
+    """Report bounded integer progress without coupling the backend to Qt."""
+    if progress_callback is not None:
+        progress_callback(max(0, min(100, int(value))), message)
+
+
+def _valid_raster_mask(raster):
+    """Return a boolean mask for finite, non-NoData raster cells."""
+    data = numpy.asarray(raster.GetMatrix())
+    mask = numpy.isfinite(data)
+    nodata = raster.NodataValue()
+    if nodata is not None:
+        try:
+            nodata_is_nan = bool(numpy.isnan(nodata))
+        except TypeError:
+            nodata_is_nan = False
+        if not nodata_is_nan:
+            mask &= data != nodata
+    return mask
+
+
+class _ShorelineKDTree:
+    """Exact nearest-shoreline lookup in raster row/column space."""
+
+    def __init__(self, shoreline_raster):
+        if cKDTree is None:
+            raise RuntimeError(
+                "SciPy is required for shoreline KDTree lookup. Install the 'scipy' package."
+            )
+        cells = numpy.argwhere(_valid_raster_mask(shoreline_raster))
+        if cells.size == 0:
+            raise ValueError("The shoreline raster contains no valid cells.")
+        self._cells = cells.astype(numpy.float64, copy=False)
+        self._tree = cKDTree(self._cells)
+
+    def __len__(self):
+        return len(self._cells)
+
+    def nearest(self, row, col, cell_size):
+        """Return nearest shoreline row, column, and distance in configured metres."""
+        distance_pixels, cell_index = self._tree.query(
+            (float(row), float(col)), k=1
+        )
+        target_row, target_col = self._cells[int(cell_index)]
+        return (
+            int(target_row),
+            int(target_col),
+            float(distance_pixels) * float(cell_size),
+        )
+
+
+def _ensure_real_field(layer, field_name, source_path):
+    """Create one real-valued field only when it is not already present."""
+    layer_definition = layer.GetLayerDefn()
+    existing_names = {
+        layer_definition.GetFieldDefn(index).GetName().lower()
+        for index in range(layer_definition.GetFieldCount())
+    }
+    if field_name.lower() in existing_names:
+        return False
+    result = layer.CreateField(ogr.FieldDefn(field_name, ogr.OFTReal))
+    if result != 0:
+        raise RuntimeError(f"Failed to create the {field_name} field in: {source_path}")
+    return True
 
 # =========================
 # 工具函数：栅格自检（可选）
@@ -45,7 +116,13 @@ def _lake_file(workSPDir, lakeName, suffix):
 def _resolve_dem_file(workSPDir, lakeName, demFile=None):
     if demFile:
         return os.path.normpath(demFile)
-    return _lake_file(workSPDir, lakeName, "_Merit.tif")
+    lower_path = workSPDir + str(lakeName) + "_merit.tif"
+    legacy_path = workSPDir + str(lakeName) + "_Merit.tif"
+    if os.path.exists(lower_path):
+        return lower_path
+    if os.path.exists(legacy_path):
+        return legacy_path
+    return lower_path
 
 def _resolve_survey_file(workSPDir, lakeName, surveyFile=None):
     if surveyFile:
@@ -78,7 +155,7 @@ def isBoundary(Raster, row, col, lake_value):
 # =========================
 # 2) 提取湖泊边界（自动识别主湖值）
 # =========================
-def boundary_extraction(lakeareaRaster):
+def boundary_extraction(lakeareaRaster, progress_callback=None):
     boundaryRaster = rasterProcessing.Raster(
         lakeareaRaster.XTopLeft(), lakeareaRaster.YTopLeft(),
         lakeareaRaster.CellSize(), lakeareaRaster.NRow(),
@@ -88,47 +165,69 @@ def boundary_extraction(lakeareaRaster):
 
     # 自动推断湖区主值（若你确定湖区值=1，可直接 LAKE_VALUE = 1）
     vals = []
-    for r in range(lakeareaRaster.NRow()):
+    row_count = lakeareaRaster.NRow()
+    last_percent = -1
+    for r in range(row_count):
         for c in range(lakeareaRaster.NCol()):
             v = lakeareaRaster.GetValue(r, c)
             if v != nodataValue:
                 vals.append(int(v))
+        percent = 4 + int(6 * (r + 1) / max(1, row_count))
+        if percent != last_percent:
+            _report_progress(progress_callback, percent, "Scanning the lake extent…")
+            last_percent = percent
     LAKE_VALUE = Counter(vals).most_common(1)[0][0] if vals else 1
 
-    for row in range(lakeareaRaster.NRow()):
+    last_percent = -1
+    for row in range(row_count):
         for col in range(lakeareaRaster.NCol()):
             if isBoundary(lakeareaRaster, row, col, LAKE_VALUE):
                 boundaryRaster.SetValue(row, col, 1)
             else:
                 boundaryRaster.SetValue(row, col, -9999)
+        percent = 10 + int(8 * (row + 1) / max(1, row_count))
+        if percent != last_percent:
+            _report_progress(progress_callback, percent, "Extracting the lake boundary…")
+            last_percent = percent
     return boundaryRaster
 
 # =========================
 # 3) 处理湖泊边界并更新属性
 # =========================
-def boundary_processing(workSPDir, lakeName, demFile=None):
+def boundary_processing(
+    workSPDir,
+    lakeName,
+    demFile=None,
+    progress_callback=None,
+    lakePolygonFile=None,
+):
     workSPDir, lakeName = _resolve_workspace(workSPDir, lakeName)
-    LakePoly = workSPDir + str(lakeName) + ".shp"
+    LakePoly = (
+        os.path.normpath(lakePolygonFile)
+        if lakePolygonFile
+        else workSPDir + str(lakeName) + ".shp"
+    )
     raster = rasterProcessing.RasterIO()
     lakeareaFile =  workSPDir + str(lakeName) + "_extent.tif"
     lakeshorelineFile =  workSPDir + str(lakeName) + "_shoreline.tif"
+    _report_progress(progress_callback, 2, "Opening the lake extent raster…")
     proj, im_geotrans, lakeRaster = raster.read_img(lakeareaFile)
-    boundaryRaster = boundary_extraction(lakeRaster)
+    boundaryRaster = boundary_extraction(lakeRaster, progress_callback)
+    _report_progress(progress_callback, 19, "Writing the shoreline raster…")
     raster.write_Tif(lakeshorelineFile, proj, im_geotrans, boundaryRaster, -9999)
     
     # 打开湖泊shp文件 shapefile
     driver = ogr.GetDriverByName("ESRI Shapefile")
     dataSource = driver.Open(LakePoly, 1)  # 1 means writable
+    if dataSource is None:
+        raise FileNotFoundError(f"Cannot open lake polygon: {LakePoly}")
     layer = dataSource.GetLayer()
     
-    # 添加新字段Ele（若已存在会失败，可加判断，这里简化处理）
-    new_field = ogr.FieldDefn("Ele", ogr.OFTReal)
-    try:
-        layer.CreateField(new_field)
-    except:
-        pass
+    # 仅在字段不存在时创建，避免重复运行生成 Ele_1、Ele_2 等字段。
+    _ensure_real_field(layer, "Ele", LakePoly)
     
     # 获取湖泊水位
+    _report_progress(progress_callback, 23, "Calculating the shoreline elevation…")
     lakelevel = getLakelevel(workSPDir, lakeName, demFile)
     
     # 更新字段值为湖泊水位
@@ -138,6 +237,8 @@ def boundary_processing(workSPDir, lakeName, demFile=None):
     
     # Clean up
     dataSource = None
+    _report_progress(progress_callback, 29, "Lake boundary processing completed.")
+    return float(lakelevel)
 
 # =========================
 # 4) 计算湖泊水位（路径统一 _Slope.tif）
@@ -171,7 +272,15 @@ def getLakelevel(_workSP, lakeName, demFile=None):
 # =========================
 # 5) 预测点 topo 信息（保持原逻辑）
 # =========================
-def determine_predictedpoints_info(_workSP, _lakename, _para_intervalList, _demFile=None):
+def determine_predictedpoints_info(
+    _workSP,
+    _lakename,
+    _para_intervalList,
+    _demFile=None,
+    progress_callback=None,
+    shoreline_index=None,
+    lakelevel=None,
+):
     demFile = _resolve_dem_file(_with_sep(_workSP), _lakename, _demFile)
     slopeFile = _workSP + "\\" + _lakename + "_Slope.tif"
     lakeareaFile = _workSP + "\\" + _lakename + "_extent.tif"
@@ -185,50 +294,28 @@ def determine_predictedpoints_info(_workSP, _lakename, _para_intervalList, _demF
     topoinfoList = []
     nodataLakeShoreline = lakeshorelineRaster.NodataValue()
 
+    _report_progress(progress_callback, 69, "Preparing prediction-point terrain data…")
+    if shoreline_index is None:
+        shoreline_index = _ShorelineKDTree(lakeshorelineRaster)
+    if lakelevel is None:
+        lakelevel = get_lakeLevel(lakeshorelineRaster, demRaster, slopeRaster)
+    interval_count = max(1, len(_para_intervalList))
     for i in range(0, len(_para_intervalList)):
         curInterval = _para_intervalList[i]
         topoinfoList = []
-        for row in range(0, lakeRaster.NRow(), curInterval):
+        rows = range(0, lakeRaster.NRow(), curInterval)
+        row_count = len(rows)
+        interval_start = 70 + (28 * i / interval_count)
+        interval_end = 70 + (28 * (i + 1) / interval_count)
+        last_percent = -1
+        for row_index, row in enumerate(rows):
             for col in range(0, lakeRaster.NCol(), curInterval):
                 tempValue = lakeRaster.GetValue(row, col)
                 tempLakeSL = lakeshorelineRaster.GetValue(row, col)
                 if tempValue != lakeRaster.NodataValue() and abs(tempLakeSL - nodataLakeShoreline) < EPS:
-                    targetColList = find_validValueinRow(lakeshorelineRaster, row)
-                    targetRowList = find_validValueinCol(lakeshorelineRaster, col)
-                    if len(targetRowList) == 0 or len(targetColList) == 0:
-                        continue
-                    minCol = targetColList[0]
-                    minRow = targetRowList[0]
-                    minDistance = -1
-                    for index in range(0, len(targetColList)):
-                        if abs(targetColList[index] - col) < abs(minCol - col):
-                            minCol = targetColList[index]
-                    for index in range(0, len(targetRowList)):
-                        if abs(targetRowList[index] - row) < abs(minRow - row):
-                            minRow = targetRowList[index]
-                    if abs(minRow - row) < abs(minCol - col):
-                        targetRow = minRow
-                        targetCol = col
-                        tempDistance = abs(minRow - row) * para_cellsize
-                        if tempDistance < minDistance or minDistance == -1:
-                            minDistance = tempDistance
-                            minIndex = abs(minRow - row)
-                    elif abs(minCol - col) <= abs(minRow - row):
-                        targetRow = row
-                        targetCol = minCol
-                        tempDistance = abs(minCol - col) * para_cellsize
-                        if tempDistance < minDistance or minDistance == -1:
-                            minDistance = tempDistance
-                            minIndex = abs(minCol - col)
-                    for rowLakeShore in range(targetRow - minIndex, targetRow + minIndex + 1):
-                        for colLakeShore in range(targetCol - minIndex, targetCol + minIndex + 1):
-                            tempValue = lakeshorelineRaster.GetValue(rowLakeShore, colLakeShore)
-                            tempDistance = cf.calDistancebyRowCol(lakeshorelineRaster, rowLakeShore, colLakeShore, row, col)
-                            if tempValue != nodataLakeShoreline and tempDistance < minDistance:
-                                minDistance = tempDistance
-                                targetRow = rowLakeShore
-                                targetCol = colLakeShore
-                    distance = (cf.calDistancebyRowCol(lakeRaster, row, col, targetRow, targetCol) / demRaster.CellSize()) * para_cellsize
+                    targetRow, targetCol, distance = shoreline_index.nearest(
+                        row, col, para_cellsize
+                    )
                     if distance < 100:
                         continue
                     xLake = lakeRaster.GetXCoordByCol(col)
@@ -236,14 +323,38 @@ def determine_predictedpoints_info(_workSP, _lakename, _para_intervalList, _demF
                     xBoundary = lakeRaster.GetXCoordByCol(targetCol)
                     yBoundary = lakeRaster.GetYCoordByRow(targetRow)
                     angle = cf.cal_angle(xLake, yLake, xBoundary, yBoundary)
-                    info = get_topoInfo(lakeRaster, lakeshorelineRaster, demRaster, slopeRaster, angle, distance, xBoundary, yBoundary, xLake, yLake)
+                    info = get_topoInfo(
+                        lakeRaster,
+                        lakeshorelineRaster,
+                        demRaster,
+                        slopeRaster,
+                        angle,
+                        distance,
+                        xBoundary,
+                        yBoundary,
+                        xLake,
+                        yLake,
+                        lakelevel,
+                    )
                     if info != -1:
                         topoinfoList.append(info)
+            percent = int(
+                interval_start
+                + (interval_end - interval_start) * (row_index + 1) / max(1, row_count)
+            )
+            if percent != last_percent:
+                _report_progress(
+                    progress_callback,
+                    percent,
+                    f"Generating prediction points ({row_index + 1}/{row_count} rows)…",
+                )
+                last_percent = percent
         _txtFile = _workSP + "MLData\\Test_" + str(curInterval) + ".txt"
         _remove_file_if_exists(_txtFile)
         print("processing:" + str(_txtFile))
         cf.writeToTXT(topoinfoList, len(topoinfoList), _txtFile)
     gc.collect()
+    _report_progress(progress_callback, 99, "Prediction-point data written.")
 
 # =========================
 # 6) Survey 点 topo 信息（关键改动：对齐与兜底）
@@ -277,7 +388,14 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
     dst = None
     ds = None
 
-def determine_surveypoints_info(_workSP, _lakename, _demFile=None, _surveyFile=None):
+def determine_surveypoints_info(
+    _workSP,
+    _lakename,
+    _demFile=None,
+    _surveyFile=None,
+    progress_callback=None,
+    lakelevel=None,
+):
     demFile = _resolve_dem_file(_with_sep(_workSP), _lakename, _demFile)
     slopeFile = _workSP + _lakename + "_Slope.tif"
     lakeareaFile = _workSP + _lakename + "_extent.tif"
@@ -290,6 +408,7 @@ def determine_surveypoints_info(_workSP, _lakename, _demFile=None, _surveyFile=N
     total = used = tooClose = noBoundary = failedTopo = 0
 
     # 读入模板栅格并对齐栅格化 Survey
+    _report_progress(progress_callback, 30, "Opening survey terrain rasters…")
     raster = rasterProcessing.RasterIO()
     proj, im_geotrans, demRaster = raster.read_img(demFile)
     proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
@@ -297,6 +416,7 @@ def determine_surveypoints_info(_workSP, _lakename, _demFile=None, _surveyFile=N
     proj, im_geotrans, lakeshorelineRaster = raster.read_img(lakeshorelineFile)
 
     # ★ 用湖区模板进行重栅格化，确保逐像元对齐
+    _report_progress(progress_callback, 34, "Rasterizing in-situ bathymetry points…")
     rasterize_survey_to_template(survey_file, surveyRasterFile, lakeRaster, proj)
     proj, im_geotrans, surveyLineRaster = raster.read_img(surveyRasterFile)
 
@@ -316,108 +436,67 @@ def determine_surveypoints_info(_workSP, _lakename, _demFile=None, _surveyFile=N
                 shore_cnt += 1
     print("shoreline non-nodata samples:", shore_cnt)
 
-    nodataSurvey = surveyLineRaster.NodataValue()
-    nodataLakeShoreline = lakeshorelineRaster.NodataValue()
+    if lakelevel is None:
+        lakelevel = get_lakeLevel(lakeshorelineRaster, demRaster, slopeRaster)
+
+    _report_progress(progress_callback, 38, "Building the shoreline KDTree…")
+    shoreline_index = _ShorelineKDTree(lakeshorelineRaster)
+    print("shoreline KDTree cells:", len(shoreline_index))
+
     topoinfoList = []
+    survey_data = numpy.asarray(surveyLineRaster.GetMatrix())
+    survey_mask = _valid_raster_mask(surveyLineRaster) & (survey_data > 0)
+    survey_cells = numpy.argwhere(survey_mask)
+    total = len(survey_cells)
+    report_stride = max(1, total // 200)
 
-    # 预提取所有岸线像元坐标（用于兜底最近邻）
-    shore_coords = []
-    for rr in range(lakeshorelineRaster.NRow()):
-        for cc in range(lakeshorelineRaster.NCol()):
-            if lakeshorelineRaster.GetValue(rr, cc) != nodataLakeShoreline:
-                shore_coords.append((rr, cc))
+    for point_index, (row, col) in enumerate(survey_cells):
+        row = int(row)
+        col = int(col)
+        targetRow, targetCol, distance = shoreline_index.nearest(
+            row, col, para_cellsize
+        )
 
-    for row in range(0, lakeRaster.NRow()):
-        for col in range(0, lakeRaster.NCol()):
-            tempValue = surveyLineRaster.GetValue(row, col)
-            if tempValue > 0 and tempValue != nodataSurvey:
-                total += 1
+        # 业务阈值：过近则跳过（你原来用 <10）
+        if distance < 10:
+            tooClose += 1
+        else:
+            xBoundary = lakeRaster.GetXCoordByCol(targetCol)
+            yBoundary = lakeRaster.GetYCoordByRow(targetRow)
+            xLake = lakeRaster.GetXCoordByCol(col)
+            yLake = lakeRaster.GetYCoordByRow(row)
+            angle = cf.cal_angle(xLake, yLake, xBoundary, yBoundary)
+            info = get_topoInfo(
+                lakeRaster,
+                lakeshorelineRaster,
+                demRaster,
+                slopeRaster,
+                angle,
+                distance,
+                xBoundary,
+                yBoundary,
+                xLake,
+                yLake,
+                lakelevel,
+            )
 
-                # 先用“同排/同列”快速查找
-                targetColList = find_validValueinRow(lakeshorelineRaster, row)
-                targetRowList = find_validValueinCol(lakeshorelineRaster, col)
-
-                if len(targetRowList) == 0 and len(targetColList) == 0:
-                    # 兜底：在岸线坐标列表中找最近邻
-                    if not shore_coords:
-                        noBoundary += 1
-                        continue
-                    min_d2 = None
-                    targetRow = targetCol = None
-                    for (rr, cc) in shore_coords:
-                        d2 = (rr - row) * (rr - row) + (cc - col) * (cc - col)
-                        if (min_d2 is None) or (d2 < min_d2):
-                            min_d2 = d2
-                            targetRow, targetCol = rr, cc
-                    minDistance = math.sqrt(min_d2) * para_cellsize
-                    minIndex = max(1, int(math.sqrt(min_d2)))
-                else:
-                    # 原逻辑：从同排/同列里取最近
-                    minCol = targetColList[0] if targetColList else col
-                    minRow = targetRowList[0] if targetRowList else row
-                    minDistance = -1
-                    if targetColList:
-                        for cc in targetColList:
-                            if abs(cc - col) < abs(minCol - col):
-                                minCol = cc
-                    if targetRowList:
-                        for rr in targetRowList:
-                            if abs(rr - row) < abs(minRow - row):
-                                minRow = rr
-
-                    if targetRowList and (not targetColList or abs(minRow - row) < abs(minCol - col)):
-                        targetRow = minRow
-                        targetCol = col
-                        tempDistance = abs(minRow - row) * para_cellsize
-                        minDistance = tempDistance
-                        minIndex = abs(minRow - row)
-                    else:
-                        targetRow = row
-                        targetCol = minCol
-                        tempDistance = abs(minCol - col) * para_cellsize
-                        minDistance = tempDistance
-                        minIndex = abs(minCol - col)
-
-                    # 保险：minIndex 合理
-                    if minDistance <= 0:
-                        minIndex = 1
-                    else:
-                        minIndex = max(1, int(minDistance / para_cellsize))
-
-                # 在 target 附近做细化搜索
-                for rowLakeShore in range(targetRow - minIndex, targetRow + minIndex + 1):
-                    for colLakeShore in range(targetCol - minIndex, targetCol + minIndex + 1):
-                        if 0 <= rowLakeShore < lakeshorelineRaster.NRow() and 0 <= colLakeShore < lakeshorelineRaster.NCol():
-                            tempVal = lakeshorelineRaster.GetValue(rowLakeShore, colLakeShore)
-                            tempDistance = cf.calDistancebyRowCol(lakeshorelineRaster, rowLakeShore, colLakeShore, row, col)
-                            if tempVal != nodataLakeShoreline and tempDistance < minDistance:
-                                minDistance = tempDistance
-                                targetRow = rowLakeShore
-                                targetCol = colLakeShore
-
-                # 距离（米）
-                distance = (cf.calDistancebyRowCol(lakeRaster, row, col, targetRow, targetCol) / demRaster.CellSize()) * para_cellsize
-
-                # 业务阈值：过近则跳过（你原来用 <10）
-                if distance < 10:
-                    tooClose += 1
-                    continue
-
-                xBoundary = lakeRaster.GetXCoordByCol(targetCol)
-                yBoundary = lakeRaster.GetYCoordByRow(targetRow)
-                xLake = lakeRaster.GetXCoordByCol(col)
-                yLake = lakeRaster.GetYCoordByRow(row)
-                angle = cf.cal_angle(xLake, yLake, xBoundary, yBoundary)
-                info = get_topoInfo(lakeRaster, lakeshorelineRaster, demRaster, slopeRaster, angle, distance, xBoundary, yBoundary, xLake, yLake)
-
-                if info == -1:
-                    failedTopo += 1
-                    continue
-
-                info = info + "," + str(surveyLineRaster.GetValue(row, col))
+            if info == -1:
+                failedTopo += 1
+            else:
+                info = info + "," + str(survey_data[row, col])
                 topoinfoList.append(info)
                 used += 1
 
+        processed = point_index + 1
+        if processed % report_stride == 0 or processed == total:
+            percent = 43 + int(24 * processed / max(1, total))
+            _report_progress(
+                progress_callback,
+                percent,
+                f"Extracting survey-point terrain data ({processed}/{total} points)…",
+            )
+
+    _report_progress(progress_callback, 68, "Writing model training data…")
     _remove_file_if_exists(_txtFile)
     cf.writeToTXT(topoinfoList, len(topoinfoList), _txtFile)
 
@@ -429,13 +508,30 @@ def determine_surveypoints_info(_workSP, _lakename, _demFile=None, _surveyFile=N
     print(f"❌ 找不到边界: {noBoundary}")
     print(f"❌ 提取地形失败: {failedTopo}")
     print("================================\n")
+    return shoreline_index, float(lakelevel)
 
 # =========================
 # 7) 计算沿射线的地形信息（原逻辑保留）
 # =========================
-def get_topoInfo(_lakeRaster, _lakeshorelineRaster, _demRaster, _slopeRaster, _angle, _distance, _coordX, _coordY, _coordLX, _coordLY):
+def get_topoInfo(
+    _lakeRaster,
+    _lakeshorelineRaster,
+    _demRaster,
+    _slopeRaster,
+    _angle,
+    _distance,
+    _coordX,
+    _coordY,
+    _coordLX,
+    _coordLY,
+    _lakelevel=None,
+):
     maxBuffer = 1000
-    lakelevel = get_lakeLevel(_lakeshorelineRaster, _demRaster, _slopeRaster)
+    lakelevel = (
+        float(_lakelevel)
+        if _lakelevel is not None
+        else get_lakeLevel(_lakeshorelineRaster, _demRaster, _slopeRaster)
+    )
     maxNum = int(maxBuffer / para_cellsize)
     if _angle >= 0 and _angle < math.pi / 4:
         position = 1
@@ -581,28 +677,19 @@ def get_lakeLevel(_lakeshorelineRaster, _demRaster, _slopeRaster):
     return medianValue
 
 # =========================
-# 9) 在特定行/列中查找有效值（保持原逻辑）
+# 9) 主入口
 # =========================
-def find_validValueinRow(_refRaster, _curRow):
-    nodatavalue = _refRaster.NodataValue()
-    colIndex = []
-    for col in range(0, _refRaster.NCol()):
-        if _refRaster.GetValue(_curRow, col) != nodatavalue:
-            colIndex.append(col)
-    return colIndex
-
-def find_validValueinCol(_refRaster, _curCol):
-    nodatavalue = _refRaster.NodataValue()
-    rowIndex = []
-    for row in range(0, _refRaster.NRow()):
-        if _refRaster.GetValue(row, _curCol) != nodatavalue:
-            rowIndex.append(row)
-    return rowIndex
-
-# =========================
-# 10) 主入口（保持原逻辑）
-# =========================
-def runPredictedPoints(param1, param2, param3, param4, param5, param6=None, param7=None):
+def runPredictedPoints(
+    param1,
+    param2,
+    param3,
+    param4,
+    param5,
+    param6=None,
+    param7=None,
+    progress_callback=None,
+    lake_polygon_file=None,
+):
     global para_cellsize  # 处理的像元大小（米）
     print('++++++++++++++++start+++++++++++++++++++++')
     
@@ -616,11 +703,35 @@ def runPredictedPoints(param1, param2, param3, param4, param5, param6=None, para
     surveyFile = param7
     ############# 输入数据 ####################
 
+    _report_progress(progress_callback, 0, "Preparing prediction-point generation…")
+
     for lakeIndex in range(0, len(lakeName)):
         dataDir = workSPDir
         tempDir = workSPDir + "MLData\\"
         os.makedirs(tempDir, exist_ok=True)
         print("+++++++++++++++processing:" + str(lakeName[lakeIndex]))
-        boundary_processing(workSPDir, lakeName[lakeIndex], demFile)
-        determine_surveypoints_info(dataDir, lakeName[lakeIndex], demFile, surveyFile)
-        determine_predictedpoints_info(dataDir, lakeName[lakeIndex], intervalList, demFile)
+        lakelevel = boundary_processing(
+            workSPDir,
+            lakeName[lakeIndex],
+            demFile,
+            progress_callback,
+            lakePolygonFile=lake_polygon_file,
+        )
+        shoreline_index, lakelevel = determine_surveypoints_info(
+            dataDir,
+            lakeName[lakeIndex],
+            demFile,
+            surveyFile,
+            progress_callback,
+            lakelevel=lakelevel,
+        )
+        determine_predictedpoints_info(
+            dataDir,
+            lakeName[lakeIndex],
+            intervalList,
+            demFile,
+            progress_callback,
+            shoreline_index=shoreline_index,
+            lakelevel=lakelevel,
+        )
+    _report_progress(progress_callback, 100, "Prediction points completed.")

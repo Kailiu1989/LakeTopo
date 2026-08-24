@@ -31,8 +31,8 @@ class BathymetryDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # Depth prediction has one additional model selector.
-        self.setFixedSize(660, 500 if self.mode == "pred_depth" else 430)
+        # Depth prediction has one additional survey-file selector.
+        self.setFixedSize(660, 550 if self.mode == "pred_depth" else 430)
 
         self.dragPos = QPoint()
         self.widgets = {} 
@@ -167,9 +167,25 @@ class BathymetryDialog(QDialog):
         if self.mode in ["pred_loc", "pred_depth"]:
             self.widgets['work_path'] = self.create_input_row("Workspace Path:", "D:/input_data/", browse=True, folder_mode=True)
             if self.mode == "pred_loc":
-                self.widgets['dem_path'] = self.create_input_row("Input DEM:", "Select .tif...", browse=True)
-                self.widgets['survey_path'] = self.create_input_row("In-situ Bath Points:", "Select .shp...", browse=True)
+                self.widgets['lake_polygon_path'] = self.create_input_row(
+                    "Lake Polygon:",
+                    "Select .shp...",
+                    browse=True,
+                    file_filter="Shapefiles (*.shp);;All Files (*)"
+                )
+                self.widgets['survey_path'] = self.create_input_row(
+                    "In-situ Bath Points:",
+                    "Select .shp...",
+                    browse=True,
+                    file_filter="Shapefiles (*.shp);;All Files (*)"
+                )
             else:
+                self.widgets['survey_path'] = self.create_input_row(
+                    "In-situ Bath Points:",
+                    "Select .shp...",
+                    browse=True,
+                    file_filter="Shapefiles (*.shp);;All Files (*)"
+                )
                 self.widgets['model'] = self.create_combo_row(
                     "Prediction Model:",
                     ["XGBoost", "Random Forest", "LightGBM"]
@@ -354,6 +370,7 @@ class BathymetryDialog(QDialog):
         else:
             dialog = QFileDialog(self, "Select File")
             dialog.setFileMode(QFileDialog.ExistingFile)
+            dialog.setNameFilter(file_filter)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""

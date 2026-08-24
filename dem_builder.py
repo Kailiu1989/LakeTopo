@@ -9,6 +9,13 @@ from scipy.spatial import cKDTree
 import os
 import math
 
+
+def _report_progress(progress_callback, value, message):
+    """Report bounded progress without coupling DEM construction to Qt."""
+    if progress_callback is not None:
+        progress_callback(max(0, min(100, int(value))), str(message))
+
+
 def meters_to_degree_resolution(meters, latitude):
     lat_rad = math.radians(latitude)
     meters_per_degree_lat = (
@@ -85,52 +92,85 @@ def reproject_shapefile(input_shp, output_shp, target_epsg):
     
 def buildLakeDEM(
     point_file, z_field_name, breakline_file, lake_polygon_file, output_dem,
-    resolution, smooth_sigma=2.0, interp_method='cubic', densify_interval=1.0, breakline_z_value=0.0
+    resolution, smooth_sigma=2.0, interp_method='cubic', densify_interval=1.0,
+    breakline_z_value=0.0, progress_callback=None
 ):
     """
     构建湖泊DEM，全部路径参数为str，数值参数为float/int
     """
     print("▶ 读取测深点...")
+    _report_progress(progress_callback, 5, "Reading measured depth points…")
     depth_points = read_points_with_z(point_file, z_field=z_field_name)
+    if depth_points.size == 0:
+        raise ValueError("No valid measured depth points were found in the input SHP.")
+    _report_progress(
+        progress_callback,
+        11,
+        f"Loaded {len(depth_points)} measured depth points.",
+    )
 
     print("▶ 获取坐标参考系...")
+    _report_progress(progress_callback, 13, "Reading the spatial reference…")
     spatial_ref = get_spatial_reference_from_shapefile(point_file)
     resolution_units = resolution_to_srs_units(float(resolution), spatial_ref, depth_points)
     densify_interval_units = resolution_to_srs_units(float(densify_interval), spatial_ref, depth_points)
 
     print("▶ 读取隔断线高密采样（z=0） ...")
+    _report_progress(progress_callback, 18, "Densifying shoreline/breakline vertices…")
     breakline_points = densify_breakline_points(
         breakline_file, target_srs=spatial_ref,
-        interval=densify_interval_units, z_value=breakline_z_value
+        interval=densify_interval_units, z_value=breakline_z_value,
+        progress_callback=progress_callback,
+    )
+    if breakline_points.size == 0:
+        raise ValueError("No valid line vertices were generated from the shoreline SHP.")
+    _report_progress(
+        progress_callback,
+        31,
+        f"Generated {len(breakline_points)} shoreline constraint points.",
     )
 
     print("▶ 合并所有点（测深+隔断线）...")
+    _report_progress(progress_callback, 34, "Combining depth and shoreline points…")
     all_points = np.vstack([depth_points, breakline_points])
 
     print("▶ 读取湖区polygon ...")
+    _report_progress(progress_callback, 37, "Reading the lake polygon…")
     polygon_coords = get_polygon_coords(lake_polygon_file)
     if polygon_coords is None:
         raise RuntimeError("未能读取到湖区面数据，请检查 polygon shp 文件！")
 
     print("▶ griddata插值 DEM ...")
-    xi, yi, zi = griddata_dem(all_points, resolution=resolution_units, method=interp_method)
+    _report_progress(progress_callback, 42, "Preparing cubic DEM interpolation…")
+    xi, yi, zi = griddata_dem(
+        all_points,
+        resolution=resolution_units,
+        method=interp_method,
+        progress_callback=progress_callback,
+    )
 
     print("▶ 构建湖区polygon mask ...")
+    _report_progress(progress_callback, 66, "Building the lake polygon mask…")
     lake_mask = build_lake_mask_from_polygon(xi, yi, polygon_coords)
+    _report_progress(progress_callback, 72, "Lake polygon mask completed.")
     
     # 二次平滑处理，提高表面细腻度
+    _report_progress(progress_callback, 75, "Smoothing the interpolated surface…")
     zi_smooth = gaussian_filter(zi, sigma=smooth_sigma)
     
     # 只保留湖区内插值，湖外全部NoData
+    _report_progress(progress_callback, 79, "Applying the lake mask and NoData values…")
     zi_masked = np.where(lake_mask, zi_smooth, np.nan)
 
     # 数值裁剪，约束在测深点实际最大/最小水深
+    _report_progress(progress_callback, 82, "Clipping the DEM to measured depth limits…")
     min_depth = np.nanmin(depth_points[:,2])
     max_depth = np.nanmax(depth_points[:,2])
     zi_masked = np.where(zi_masked < min_depth, min_depth, zi_masked)
     zi_masked = np.where(zi_masked > max_depth, max_depth, zi_masked)
 
     # 保证湖岸线（polygon边界）为0
+    _report_progress(progress_callback, 86, "Setting shoreline cells to zero…")
     px, py = polygon_coords[:,0], polygon_coords[:,1]
     polykdtree = cKDTree(np.c_[px, py])
     flat_xy = np.c_[xi.flatten(), yi.flatten()]
@@ -139,9 +179,11 @@ def buildLakeDEM(
     zi_masked[border_mask] = 0
 
     print("▶ 保存 DEM 为 GeoTIFF ...")
+    _report_progress(progress_callback, 94, f"Writing GeoTIFF: {output_dem}")
     save_dem_to_geotiff(xi, yi, zi_masked, output_dem, spatial_ref)
 
     print("🎉 构建完成！湖岸线为0，湖外NoData，湖内插值表面平滑")
+    _report_progress(progress_callback, 100, f"Terrain DEM completed: {output_dem}")
     return output_dem
 
 # --- 以下是内部调用函数，保持和你的风格一致 ---
@@ -163,7 +205,13 @@ def get_spatial_reference_from_shapefile(shapefile_path):
     srs = layer.GetSpatialRef()
     return srs.Clone() if srs else None
 
-def densify_breakline_points(shapefile_path, target_srs, interval=1.0, z_value=0.0):
+def densify_breakline_points(
+    shapefile_path,
+    target_srs,
+    interval=1.0,
+    z_value=0.0,
+    progress_callback=None,
+):
     ds = ogr.Open(shapefile_path)
     layer = ds.GetLayer()
     source_srs = layer.GetSpatialRef()
@@ -187,6 +235,11 @@ def densify_breakline_points(shapefile_path, target_srs, interval=1.0, z_value=0
 
         else:
             print("跳过类型:", geom.GetGeometryName())
+            _report_progress(
+                progress_callback,
+                20,
+                f"Skipping unsupported breakline geometry: {geom.GetGeometryName()}",
+            )
             continue
 
         for line in lines:
@@ -253,7 +306,7 @@ def get_polygon_coords(shapefile_path):
             return np.array(coords)
     return None
 
-def griddata_dem(points, resolution=2.0, method='cubic'):
+def griddata_dem(points, resolution=2.0, method='cubic', progress_callback=None):
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     xmin, xmax = x.min(), x.max()
     ymin, ymax = y.min(), y.max()
@@ -263,6 +316,11 @@ def griddata_dem(points, resolution=2.0, method='cubic'):
     yi = np.linspace(ymin, ymax, nrows)
     xi, yi = np.meshgrid(xi, yi)
     print(f"插值格网大小：{nrows} x {ncols}")
+    _report_progress(
+        progress_callback,
+        48,
+        f"Interpolating a {nrows} × {ncols} grid ({nrows * ncols:,} cells)…",
+    )
     zi = griddata((x, y), z, (xi, yi), method=method)
     #监测插值结果中的NaN数量，帮助调试
     print("NaN count:",
@@ -270,6 +328,11 @@ def griddata_dem(points, resolution=2.0, method='cubic'):
 
     print("Total cells:",
       zi.size)
+    _report_progress(
+        progress_callback,
+        63,
+        f"Interpolation completed: {zi.size:,} cells, {int(np.isnan(zi).sum()):,} NaN.",
+    )
     return xi, yi, zi
 
 def build_lake_mask_from_polygon(xi, yi, polygon_coords):
@@ -297,7 +360,15 @@ def save_dem_to_geotiff(xi, yi, zi, output_path, srs):
     dst = None
     print(f"✅ DEM 已保存为：{output_path}")
 
-def runLakeDEM(param1, param2, param3, param4, param5, param6):
+def runLakeDEM(
+    param1,
+    param2,
+    param3,
+    param4,
+    param5,
+    param6,
+    progress_callback=None,
+):
     """
     param1: point_file
     param2: z_field_name
@@ -312,15 +383,19 @@ def runLakeDEM(param1, param2, param3, param4, param5, param6):
         breakline_z_value=0.0
     """
     print("开始执行湖泊DEM构建...")
+    _report_progress(progress_callback, 0, "Preparing terrain DEM generation…")
     result = buildLakeDEM(
         param1, param2, param3, param4, param5,
         resolution=float(param6),
         smooth_sigma=2.0,
         interp_method='cubic',
         densify_interval=1.0,
-        breakline_z_value=0.0
+        breakline_z_value=0.0,
+        progress_callback=progress_callback,
     )
     if result:
         print("✅ DEM 已生成：", result)
     else:
         print("❌ DEM生成失败！")
+        raise RuntimeError("Terrain DEM generation returned no output file.")
+    return result
