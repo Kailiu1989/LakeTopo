@@ -1,8 +1,7 @@
 import os
 import shutil
-import math
 import numpy as np
-from osgeo import gdal, ogr, osr, gdalconst
+from osgeo import gdal, ogr
 import Common_Function as cf
 
 from PyQt5.QtWidgets import (
@@ -23,6 +22,7 @@ try:
     import A_PredictedPoints_Gen as mainFunc
     import B_Depth_Prediction as PredictFunc
     import dem_builder as DEMFunc
+    import dem_mosaic as MosaicFunc
 except ImportError as e:
     print(f"Warning: Failed to import backend modules: {e}")
 
@@ -55,11 +55,9 @@ class PredictionWorker(QObject):
                     self.params["lake_name"],
                     self.params["interval"],
                     self.params["win_size"],
-                    self.params["cell_size"],
-                    None,
-                    self.params["survey_path"],
                     progress_callback=self._report_progress,
                     lake_polygon_file=self.params["lake_polygon_path"],
+                    survey_file=self.params["survey_path"],
                 )
                 result = None
             elif self.mode == "pred_depth":
@@ -68,8 +66,7 @@ class PredictionWorker(QObject):
                     self.params["lake_name"],
                     self.params["interval"],
                     self.params["win_size"],
-                    self.params["cell_size"],
-                    self.params["model"],
+                    model_name=self.params["model"],
                     progress_callback=self._report_progress,
                     survey_file=self.params["survey_path"],
                 )
@@ -81,6 +78,14 @@ class PredictionWorker(QObject):
                     self.params["polygon"],
                     self.params["out_dem"],
                     self.params["resolution"],
+                    progress_callback=self._report_progress,
+                )
+            elif self.mode == "mosaic":
+                result = MosaicFunc.run_mosaic_dem(
+                    self.params["lake_dem"],
+                    self.params["mosaic_dem"],
+                    self.params["out_raster"],
+                    self.params["operator"],
                     progress_callback=self._report_progress,
                 )
             else:
@@ -205,7 +210,6 @@ class PageBathymetry(QWidget):
             p2 = data.get('lake_name') or os.path.basename(os.path.normpath(p1))
             p3 = int(data['interval'])
             p4 = int(data['win_size'])
-            p5 = int(data['cell_size'])
             p6 = data.get('lake_polygon_path', '').strip()
             p7 = data.get('survey_path', '').strip()
 
@@ -244,7 +248,6 @@ class PageBathymetry(QWidget):
                 "lake_name": p2,
                 "interval": p3,
                 "win_size": p4,
-                "cell_size": p5,
                 "lake_polygon_path": p6,
                 "survey_path": p7,
             }
@@ -264,7 +267,6 @@ class PageBathymetry(QWidget):
             p2 = data.get('lake_name') or os.path.basename(os.path.normpath(p1))
             p3 = int(data['interval'])
             p4 = int(data['win_size'])
-            p5 = int(data['cell_size'])
             model_name = data.get('model', 'XGBoost')
             survey_path = data.get('survey_path', '').strip()
 
@@ -280,7 +282,6 @@ class PageBathymetry(QWidget):
                 "lake_name": p2,
                 "interval": p3,
                 "win_size": p4,
-                "cell_size": p5,
                 "model": model_name,
                 "survey_path": survey_path,
             }
@@ -375,6 +376,7 @@ class PageBathymetry(QWidget):
                 "pred_loc": "Prediction points failed",
                 "pred_depth": "Depth prediction failed",
                 "terrain": "Terrain generation failed",
+                "mosaic": "DEM mosaic failed",
             }.get(mode, "Bathymetry task failed")
             QMessageBox.critical(self, "Execution Error", f"{prefix}: {result}")
         elif mode == "pred_depth":
@@ -390,6 +392,16 @@ class PageBathymetry(QWidget):
                 self,
                 "Success",
                 f"Terrain DEM generated successfully!\nOutput: {result}",
+            )
+        elif mode == "mosaic":
+            QMessageBox.information(
+                self,
+                "Success",
+                "DEM mosaic completed!\n"
+                f"Operator: {result['operator']}\n"
+                f"Lake pixels in target grid: {result['lake_pixels']:,}\n"
+                f"Changed target pixels: {result['changed_pixels']:,}\n"
+                f"Output: {result['output']}",
             )
         else:
             QMessageBox.information(self, "Success", "Task Completed!")
@@ -503,93 +515,39 @@ class PageBathymetry(QWidget):
 
     def logic_mosaic(self, data):
         """DEM 镶嵌"""
-        lake_dem = data.get('lake_dem')
-        mosaic_dem = data.get('mosaic_dem')
-        pixel_size = float(data.get('cell_size', 10))
-        output = data.get('out_raster')
-        operator = data.get('operator', 'First')
+        lake_dem = data.get('lake_dem', '').strip()
+        mosaic_dem = data.get('mosaic_dem', '').strip()
+        output = data.get('out_raster', '').strip()
+        operator = data.get('operator', 'Lake DEM Priority')
 
-        if not os.path.exists(lake_dem) or not os.path.exists(mosaic_dem):
+        if not os.path.isfile(lake_dem) or not os.path.isfile(mosaic_dem):
             QMessageBox.warning(self, "Error", "Input DEMs not found.")
             return
-
-        # 映射 Operator
-        # "First", "Maximum", "Minimum", "Mean"
-        ok, message = cf.check_spatial_references_match([lake_dem, mosaic_dem])
-        if not ok:
-            QMessageBox.warning(self, "Projection Mismatch", message)
+        if not output:
+            QMessageBox.warning(self, "Error", "Output Raster path is required.")
+            return
+        input_paths = {os.path.normcase(os.path.abspath(path)) for path in (lake_dem, mosaic_dem)}
+        if os.path.normcase(os.path.abspath(output)) in input_paths:
+            QMessageBox.warning(
+                self,
+                "Error",
+                "Output Raster must be a new file and cannot overwrite an input DEM.",
+            )
             return
 
-        alg_map = {
-            "First": None, # Default
-            "Maximum": "MAX",
-            "Minimum": "MIN",
-            "Mean": "AVERAGE"
-        }
-        alg = alg_map.get(operator)
-
-        warp_options = ["NUM_THREADS=ALL_CPUS"]
-        if alg:
-            warp_options.append(f"MERGE_ALG={alg}")
-
-        # 获取 NodData
-        ds = gdal.Open(lake_dem)
-        nodata = ds.GetRasterBand(1).GetNoDataValue()
-        dtype = ds.GetRasterBand(1).DataType
-        x_res, y_res = self.resolve_raster_resolution(ds, pixel_size)
-        ds = None
-
-        options = gdal.WarpOptions(
-            format="GTiff",
-            xRes=x_res, yRes=y_res,
-            srcNodata=nodata, dstNodata=nodata,
-            outputType=dtype,
-            warpOptions=warp_options,
-            resampleAlg=gdalconst.GRA_NearestNeighbour
+        self._start_prediction_task(
+            "mosaic",
+            {
+                "lake_dem": lake_dem,
+                "mosaic_dem": mosaic_dem,
+                "out_raster": output,
+                "operator": operator,
+            },
+            "Mosaic DEM",
+            "Preparing grid-preserving DEM mosaic…",
         )
-
-        gdal.Warp(output, [lake_dem, mosaic_dem], options=options)
-        QMessageBox.information(self, "Success", "Mosaic completed.")
 
     # ------------------ 辅助函数 ------------------
-    def resolve_raster_resolution(self, raster_ds, resolution_meters):
-        srs = osr.SpatialReference()
-        projection = raster_ds.GetProjection()
-        if projection:
-            srs.ImportFromWkt(projection)
-        else:
-            return resolution_meters, resolution_meters
-
-        if srs.IsGeographic():
-            latitude = self.get_raster_center_y(raster_ds)
-            return self.meters_to_degree_resolution_xy(resolution_meters, latitude)
-
-        linear_units = srs.GetLinearUnits() or 1.0
-        resolution_units = resolution_meters / linear_units
-        return resolution_units, resolution_units
-
-    def get_raster_center_y(self, raster_ds):
-        gt = raster_ds.GetGeoTransform()
-        return gt[3] + gt[4] * (raster_ds.RasterXSize / 2.0) + gt[5] * (raster_ds.RasterYSize / 2.0)
-
-    def meters_to_degree_resolution_xy(self, meters, latitude):
-        lat_rad = math.radians(latitude)
-        meters_per_degree_lat = (
-            111132.92
-            - 559.82 * math.cos(2 * lat_rad)
-            + 1.175 * math.cos(4 * lat_rad)
-            - 0.0023 * math.cos(6 * lat_rad)
-        )
-        meters_per_degree_lon = (
-            111412.84 * math.cos(lat_rad)
-            - 93.5 * math.cos(3 * lat_rad)
-            + 0.118 * math.cos(5 * lat_rad)
-        )
-        if meters_per_degree_lat <= 0:
-            meters_per_degree_lat = 111320.0
-        if abs(meters_per_degree_lon) <= 0.000001:
-            meters_per_degree_lon = meters_per_degree_lat
-        return meters / abs(meters_per_degree_lon), meters / meters_per_degree_lat
 
     def calculate_shore_elevation(self, lake_shapefile, raster_path):
         """计算湖岸线平均高程"""
@@ -605,23 +563,33 @@ class PageBathymetry(QWidget):
             layer = ds_shp.GetLayer()
             
             elevs = []
+            polygon_count = 0
+            nodata = band.GetNoDataValue()
             for feat in layer:
                 geom = feat.GetGeometryRef()
-                if geom:
-                    # 简化：取外边界点
-                    ring = geom.GetGeometryRef(0) 
+                for ring in cf.iter_polygon_exterior_rings(geom):
+                    polygon_count += 1
                     for i in range(ring.GetPointCount()):
                         mx, my = ring.GetX(i), ring.GetY(i)
                         px = int((mx - gt[0]) / gt[1])
                         py = int((my - gt[3]) / gt[5])
-                        try:
-                            val = band.ReadAsArray(px, py, 1, 1)[0, 0]
-                            if val != band.GetNoDataValue():
-                                elevs.append(val)
-                        except: pass
+                        if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
+                            continue
+                        values = band.ReadAsArray(px, py, 1, 1)
+                        if values is None:
+                            continue
+                        value = float(values[0, 0])
+                        if np.isfinite(value) and (nodata is None or value != nodata):
+                            elevs.append(value)
             
-            if elevs: return np.mean(elevs)
-            else: raise Exception("No valid elevation found on shoreline.")
+            if polygon_count == 0:
+                raise Exception(
+                    "Lake shapefile contains no valid Polygon, MultiPolygon, "
+                    "PolygonZ, or MultiPolygonZ geometry."
+                )
+            if elevs:
+                return np.mean(elevs)
+            raise Exception("No valid elevation found on shoreline.")
 
         except Exception as e:
             raise e

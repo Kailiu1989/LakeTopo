@@ -492,34 +492,38 @@ class PageVolume(QWidget):
                 
             geo_transform = raster_ds.GetGeoTransform()
             band = raster_ds.GetRasterBand(1)
+            nodata = band.GetNoDataValue()
             
             elevations = []
+            polygon_count = 0
             for feature in layer:
                 geom = feature.GetGeometryRef()
-                # 遍历几何体的所有点
-                if geom:
-                    # 简化逻辑：如果是多边形，取其外环点
-                    boundary = geom.GetGeometryRef(0) 
+                for boundary in cf.iter_polygon_exterior_rings(geom):
+                    polygon_count += 1
                     for i in range(boundary.GetPointCount()):
-                        lon, lat = boundary.GetX(i), boundary.GetY(i)
-                        px = int((lon - geo_transform[0]) / geo_transform[1])
-                        py = int((lat - geo_transform[3]) / geo_transform[5])
-                        
-                        try:
-                            # 读取单个像素值
-                            val = band.ReadAsArray(px, py, 1, 1)
-                            if val is not None:
-                                elevation = val[0, 0]
-                                # 排除 NoData
-                                if elevation != band.GetNoDataValue():
-                                    elevations.append(elevation)
-                        except:
-                            pass
+                        x_coord, y_coord = boundary.GetX(i), boundary.GetY(i)
+                        px = int((x_coord - geo_transform[0]) / geo_transform[1])
+                        py = int((y_coord - geo_transform[3]) / geo_transform[5])
+                        if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
+                            continue
+
+                        values = band.ReadAsArray(px, py, 1, 1)
+                        if values is None:
+                            continue
+                        elevation = float(values[0, 0])
+                        if np.isfinite(elevation) and (
+                            nodata is None or elevation != nodata
+                        ):
+                            elevations.append(elevation)
                             
+            if polygon_count == 0:
+                raise Exception(
+                    "Lake shapefile contains no valid Polygon, MultiPolygon, "
+                    "PolygonZ, or MultiPolygonZ geometry."
+                )
             if elevations:
                 return np.mean(elevations)
-            else:
-                raise Exception("No valid elevation data found on shoreline.")
+            raise Exception("No valid elevation data found on shoreline.")
         
         except Exception as e:
             raise RuntimeError(f"Shore elevation calc failed: {str(e)}")

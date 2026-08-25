@@ -107,6 +107,37 @@ def check_spatial_references_match(paths):
 
     return True, ""
 
+
+def iter_polygon_parts(geometry):
+    """Yield Polygon members from Polygon/MultiPolygon geometries, ignoring Z/M."""
+    if ogr is None or geometry is None or geometry.IsEmpty():
+        return
+
+    geometry_type = ogr.GT_Flatten(geometry.GetGeometryType())
+    if geometry_type == ogr.wkbPolygon:
+        yield geometry
+        return
+
+    if geometry_type == ogr.wkbMultiPolygon:
+        for part_index in range(geometry.GetGeometryCount()):
+            polygon = geometry.GetGeometryRef(part_index)
+            if (
+                polygon is not None
+                and not polygon.IsEmpty()
+                and ogr.GT_Flatten(polygon.GetGeometryType()) == ogr.wkbPolygon
+            ):
+                yield polygon
+
+
+def iter_polygon_exterior_rings(geometry):
+    """Yield exterior LinearRings from 2-D, Z, or M polygon geometries."""
+    for polygon in iter_polygon_parts(geometry):
+        if polygon.GetGeometryCount() == 0:
+            continue
+        exterior_ring = polygon.GetGeometryRef(0)
+        if exterior_ring is not None and not exterior_ring.IsEmpty():
+            yield exterior_ring
+
 # 删除指定路径下的所有文件和文件夹
 # 输入参数:
 # path: 需要删除文件和文件夹的路径

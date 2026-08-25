@@ -8,6 +8,7 @@ from matplotlib.path import Path
 from scipy.spatial import cKDTree
 import os
 import math
+import Common_Function as cf
 
 
 def _report_progress(progress_callback, value, message):
@@ -292,18 +293,20 @@ def densify_breakline_points(
 
 def get_polygon_coords(shapefile_path):
     ds = ogr.Open(shapefile_path)
+    if ds is None:
+        return None
     layer = ds.GetLayer()
+    if layer is None:
+        ds = None
+        return None
     for feat in layer:
         geom = feat.GetGeometryRef()
-        if geom.GetGeometryType() == ogr.wkbPolygon:
-            ring = geom.GetGeometryRef(0)
+        for ring in cf.iter_polygon_exterior_rings(geom):
             coords = [(ring.GetX(i), ring.GetY(i)) for i in range(ring.GetPointCount())]
-            return np.array(coords)
-        elif geom.GetGeometryType() == ogr.wkbMultiPolygon:
-            poly = geom.GetGeometryRef(0)
-            ring = poly.GetGeometryRef(0)
-            coords = [(ring.GetX(i), ring.GetY(i)) for i in range(ring.GetPointCount())]
-            return np.array(coords)
+            if len(coords) >= 4:
+                ds = None
+                return np.asarray(coords, dtype=np.float64)
+    ds = None
     return None
 
 def griddata_dem(points, resolution=2.0, method='cubic', progress_callback=None):

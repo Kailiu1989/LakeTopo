@@ -14,10 +14,20 @@ class Raster:
     # nRow: 行数
     # nCol: 列数
     # noDataValue: 无效数据值
-    def __init__(self, xTopLeft, yTopLeft, cellSize, nRow, nCol, noDataValue):
+    def __init__(
+        self,
+        xTopLeft,
+        yTopLeft,
+        cellSize,
+        nRow,
+        nCol,
+        noDataValue,
+        yCellSize=None,
+    ):
         self._xTopLeft = xTopLeft
         self._yTopLeft = yTopLeft
         self._cellSize = cellSize
+        self._cellSizeY = abs(yCellSize) if yCellSize is not None else abs(cellSize)
         self._nRow = nRow
         self._nCol = nCol
         self._noDataValue = noDataValue
@@ -104,6 +114,10 @@ class Raster:
     def CellSize(self):
         return self._cellSize
 
+    # 获取Y方向栅格单元大小（正值）
+    def CellSizeY(self):
+        return self._cellSizeY
+
     # 获取无效数据值
     def NodataValue(self):
         return self._noDataValue
@@ -130,11 +144,11 @@ class Raster:
 
     # 根据行索引获取Y坐标
     def GetYCoordByRow(self, row):
-        return self._yTopLeft - row * self._cellSize
+        return self._yTopLeft - row * self._cellSizeY
 
     # 根据Y坐标获取行索引
     def GetRowbyYCoord(self, yCoord):
-        return int((self._yTopLeft - yCoord) / self._cellSize)
+        return int((self._yTopLeft - yCoord) / self._cellSizeY)
 
     # 根据X坐标获取列索引
     def GetColbyXCoord(self, xCoord):
@@ -168,7 +182,15 @@ class RasterIO:
         im_proj = dataset.GetProjection()
         im_data = band.ReadAsArray(0, 0, im_width, im_height)
         del dataset
-        imRaster = Raster(im_xTopLeft, im_yTopLeft, im_cellsize, im_height, im_width, im_nodatavalue)
+        imRaster = Raster(
+            im_xTopLeft,
+            im_yTopLeft,
+            im_cellsize,
+            im_height,
+            im_width,
+            im_nodatavalue,
+            yCellSize=abs(im_geotrans[5]),
+        )
         imRaster.SetMatrix(im_data)
         return im_proj, im_geotrans, imRaster
 

@@ -341,7 +341,7 @@ def runMLProcessing(
     param2,
     param3,
     param4,
-    param5,
+    param5=None,
     model_name="XGBoost",
     progress_callback=None,
     survey_file=None,
@@ -354,7 +354,6 @@ def runMLProcessing(
     lakeName = [resolved_lake]  # 输入需要进行处理的湖泊
     intervalList = [param3]  # 生成的预测点间隔
     para_Window = param4  # 窗口大小
-    para_cellsize = param5  # 处理的像元大小
     model_name = _normalize_model_name(model_name)
     ############## 输入数据 ####################
 

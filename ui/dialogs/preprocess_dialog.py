@@ -24,7 +24,7 @@ class PreprocessDialog(QDialog):
 
     def __init__(self, mode="workspace", parent=None):
         """
-        mode: 'workspace', 'extraction', 'shoreline', 'buffer', 'projection_wgs84'
+        mode: 'workspace', 'buffer', 'projection_wgs84'
         """
         super().__init__(parent)
         self.mode = mode
@@ -132,8 +132,6 @@ class PreprocessDialog(QDialog):
 
         title_map = {
             "workspace": "Open/Create Workspace",
-            "extraction": "Water Raster Extraction",
-            "shoreline": "Shoreline Generation",
             "buffer": "Buffer Full Process",
             "projection_wgs84": "Batch Projection to WGS84"
         }
@@ -165,16 +163,7 @@ class PreprocessDialog(QDialog):
             if self.mode == "workspace":
                 self.widgets['ws_path'] = self.create_input_row("Workspace Path:", "D:/LakeWorkspace", browse=True, folder_mode=True)
 
-            # 2. 水域栅格提取
-            elif self.mode == "extraction":
-                self.widgets['raster_in'] = self.create_input_row("Input Raster:", "Select .tif...", browse=True)
-                self.widgets['mask_in'] = self.create_input_row("Input Mask:", "Select .shp...", browse=True)
-
-            # 3. 湖岸线生成
-            elif self.mode == "shoreline":
-                self.widgets['feat_in'] = self.create_input_row("Input Feature:", "Select .shp...", browse=True)
-
-            # 4. 缓冲区一键处理
+            # 2. 缓冲区、水体范围和 WGS84 岸线一键处理
             elif self.mode == "buffer":
                 self.widgets['lake_shp'] = self.create_input_row("Input Lake Polygon:", "Select .shp...", browse=True)
                 self.widgets['dem_in'] = self.create_input_row("Input DEM:", "Select .tif...", browse=True)
@@ -184,7 +173,17 @@ class PreprocessDialog(QDialog):
                 # style="Gold" 表示这是数值参数，高亮显示
                 self.widgets['buffer_dist'] = self.create_input_row("Buffer Distance (m):", "1000", style="Gold", is_value=True)
 
-            # 5. 批量投影转换到 WGS84 (EPSG:4326)
+                note = QLabel(
+                    "Also outputs <workspace>_extent.tif and shoreline.shp; "
+                    "shoreline.shp is explicitly reprojected to WGS84 (EPSG:4326)."
+                )
+                note.setWordWrap(True)
+                note.setStyleSheet(
+                    "color: #73cfc1; font-size: 13px; background: transparent; padding: 4px 2px;"
+                )
+                self.form_layout.addWidget(note)
+
+            # 3. 批量投影转换到 WGS84 (EPSG:4326)
             elif self.mode == "projection_wgs84":
                 self.widgets['input_files'] = self.create_input_row(
                     "Input SHP/TIF Files:",

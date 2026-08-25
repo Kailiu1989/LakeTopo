@@ -31,8 +31,8 @@ class BathymetryDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        # Depth prediction has one additional survey-file selector.
-        self.setFixedSize(660, 550 if self.mode == "pred_depth" else 430)
+        # Cell size is derived automatically, so prediction dialogs need one row less.
+        self.setFixedSize(660, 500 if self.mode == "pred_depth" else 390)
 
         self.dragPos = QPoint()
         self.widgets = {} 
@@ -190,9 +190,8 @@ class BathymetryDialog(QDialog):
                     "Prediction Model:",
                     ["XGBoost", "Random Forest", "LightGBM"]
                 )
-            self.widgets['interval'] = self.create_input_row("Interval (m):", "5", style="Gold", is_value=True)
+            self.widgets['interval'] = self.create_input_row("Interval (pixels):", "5", style="Gold", is_value=True)
             self.widgets['win_size'] = self.create_input_row("Window Size:", "5", style="Gold", is_value=True)
-            self.widgets['cell_size'] = self.create_input_row("Cell Size (m):", "90", style="Gold", is_value=True)
 
         # 3. 水下地形生成
         elif self.mode == "terrain":
@@ -227,11 +226,21 @@ class BathymetryDialog(QDialog):
 
         # 5. DEM镶嵌
         elif self.mode == "mosaic":
-            self.widgets['lake_dem'] = self.create_input_row("Lake DEM:", "Select .tif...", browse=True)
-            self.widgets['mosaic_dem'] = self.create_input_row("Mosaic To DEM:", "Select .tif...", browse=True)
-            self.widgets['cell_size'] = self.create_input_row("Cell Size (m):", "10", style="Gold", is_value=True)
-            
-            ops = ["First", "Maximum", "Minimum", "Mean"]
+            dem_filter = "GeoTIFF Files (*.tif *.tiff);;All Files (*)"
+            self.widgets['lake_dem'] = self.create_input_row(
+                "Lake DEM:",
+                "Select .tif...",
+                browse=True,
+                file_filter=dem_filter,
+            )
+            self.widgets['mosaic_dem'] = self.create_input_row(
+                "Mosaic To DEM:",
+                "Select .tif...",
+                browse=True,
+                file_filter=dem_filter,
+            )
+
+            ops = ["Lake DEM Priority", "Maximum", "Minimum", "Mean"]
             self.widgets['operator'] = self.create_combo_row("Mosaic Operator:", ops)
             
             self.widgets['out_raster'] = self.create_input_row(

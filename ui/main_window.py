@@ -8,6 +8,7 @@ from PyQt5.QtGui import QIcon, QPainter, QPen, QColor, QFont, QLinearGradient, Q
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtSvg import QSvgRenderer
 import numpy as np
+from app_version import APP_DISPLAY_NAME
 
 from ui.widgets.volume_visualization import VolumeVisualizationWidget
 
@@ -268,6 +269,8 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def closeEvent(self, event):
+        if hasattr(self, 'page_preprocess') and hasattr(self.page_preprocess, 'shutdown'):
+            self.page_preprocess.shutdown()
         if hasattr(self, 'page_bathymetry') and hasattr(self.page_bathymetry, 'shutdown'):
             self.page_bathymetry.shutdown()
         if hasattr(self, 'page_volume') and hasattr(self.page_volume, 'shutdown'):
@@ -790,7 +793,7 @@ class MainWindow(QMainWindow):
 
     def apply_translations(self):
 
-        self.setWindowTitle(self.translate("LakeTopo V2.1.0"))
+        self.setWindowTitle(self.translate(APP_DISPLAY_NAME))
         
         if hasattr(self, "status_bar"):
             self.status_bar.showMessage(self.translate("Ready"))

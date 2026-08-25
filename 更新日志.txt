@@ -6,3 +6,10 @@
 #4.3维地图无法正常加载显示数据（已解决
 #5.后续考虑添加一个批量投影转换页面功能 （已添加
 
+1.Fixed some known bugs.
+2.Simplified the preprocess page function to 3 modules.
+3.Optimized the lake depth reconstruction algorithm; it no longer shares row and column indices across grids, and feature values at different distances are extracted based on true cumulative metric measurements.
+4.Fixed the mosaic dem module which wouldn't actually mosaic.
+5.Add visible progress bar for some progress.
+6.Optimized the logic of some modules.
+7.Add RF and LightGBM options

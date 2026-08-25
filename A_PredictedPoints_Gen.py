@@ -14,7 +14,7 @@ except ImportError:
 
 # 避免除零错误
 EPS = 0.0001
-# para_cellsize = 90 #处理的像元大小（由 runPredictedPoints 传入并设为全局）
+EARTH_RADIUS_M = 6371008.8
 
 
 def _report_progress(progress_callback, value, message):
@@ -38,10 +38,160 @@ def _valid_raster_mask(raster):
     return mask
 
 
-class _ShorelineKDTree:
-    """Exact nearest-shoreline lookup in raster row/column space."""
+def _is_valid_raster_value(raster, value):
+    """Return True only for finite values that are not the raster NoData value."""
+    if value is None:
+        return False
+    try:
+        if not numpy.isfinite(value):
+            return False
+    except TypeError:
+        return False
+    nodata = raster.NodataValue()
+    if nodata is None:
+        return True
+    try:
+        if numpy.isnan(nodata):
+            return True
+    except TypeError:
+        pass
+    return value != nodata
 
-    def __init__(self, shoreline_raster):
+
+def _sample_raster_at_xy(raster, x_coord, y_coord):
+    """Sample one raster using that raster's own coordinate-to-index mapping."""
+    relative_row = (raster.YTopLeft() - y_coord) / raster.CellSizeY()
+    relative_col = (x_coord - raster.XTopLeft()) / raster.CellSize()
+    if (
+        relative_row < 0
+        or relative_row >= raster.NRow()
+        or relative_col < 0
+        or relative_col >= raster.NCol()
+    ):
+        return None
+    row = int(math.floor(relative_row))
+    col = int(math.floor(relative_col))
+    value = raster.GetValue(row, col)
+    return float(value) if _is_valid_raster_value(raster, value) else None
+
+
+def _spatial_reference(projection_wkt, label):
+    if not projection_wkt:
+        raise ValueError(f"{label} raster has no coordinate reference system.")
+    spatial_ref = osr.SpatialReference()
+    if spatial_ref.ImportFromWkt(projection_wkt) != 0:
+        raise ValueError(f"Cannot read the coordinate reference system of {label} raster.")
+    if hasattr(spatial_ref, "SetAxisMappingStrategy"):
+        spatial_ref.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return spatial_ref
+
+
+def _validate_matching_crs(named_projections):
+    """Fail early when rasters cannot be sampled in one shared coordinate space."""
+    items = list(named_projections.items())
+    if not items:
+        return
+    base_name, base_wkt = items[0]
+    base_ref = _spatial_reference(base_wkt, base_name)
+    for name, projection_wkt in items[1:]:
+        candidate_ref = _spatial_reference(projection_wkt, name)
+        if not bool(base_ref.IsSame(candidate_ref)):
+            raise ValueError(
+                f"Raster projection mismatch: {base_name} and {name}. "
+                "Reproject the rasters to one CRS before generating prediction points."
+            )
+
+
+class _SpatialMetric:
+    """Convert raster coordinates to a local metric space derived from the raster CRS."""
+
+    def __init__(self, projection_wkt, reference_raster):
+        spatial_ref = _spatial_reference(projection_wkt, "reference")
+        self._reference_x = (
+            reference_raster.XTopLeft()
+            + reference_raster.CellSize() * (reference_raster.NCol() - 1) / 2.0
+        )
+        self._reference_y = (
+            reference_raster.YTopLeft()
+            - reference_raster.CellSizeY() * (reference_raster.NRow() - 1) / 2.0
+        )
+        self._is_geographic = bool(spatial_ref.IsGeographic())
+        if self._is_geographic:
+            self._angular_to_radians = float(spatial_ref.GetAngularUnits() or (math.pi / 180.0))
+            reference_latitude = self._reference_y * self._angular_to_radians
+            self._cos_reference_latitude = max(abs(math.cos(reference_latitude)), 1e-12)
+            self._linear_units_to_metres = None
+        elif spatial_ref.IsProjected():
+            self._linear_units_to_metres = float(spatial_ref.GetLinearUnits() or 1.0)
+            self._angular_to_radians = None
+            self._cos_reference_latitude = None
+        else:
+            raise ValueError("Unsupported raster coordinate reference system.")
+
+    def to_metric(self, x_coord, y_coord):
+        x_values = numpy.asarray(x_coord, dtype=numpy.float64)
+        y_values = numpy.asarray(y_coord, dtype=numpy.float64)
+        if self._is_geographic:
+            x_metres = (
+                (x_values - self._reference_x)
+                * self._angular_to_radians
+                * EARTH_RADIUS_M
+                * self._cos_reference_latitude
+            )
+            y_metres = (
+                (y_values - self._reference_y)
+                * self._angular_to_radians
+                * EARTH_RADIUS_M
+            )
+        else:
+            x_metres = (x_values - self._reference_x) * self._linear_units_to_metres
+            y_metres = (y_values - self._reference_y) * self._linear_units_to_metres
+        return x_metres, y_metres
+
+    def from_metric(self, x_metres, y_metres):
+        x_values = numpy.asarray(x_metres, dtype=numpy.float64)
+        y_values = numpy.asarray(y_metres, dtype=numpy.float64)
+        if self._is_geographic:
+            x_coord = self._reference_x + x_values / (
+                self._angular_to_radians
+                * EARTH_RADIUS_M
+                * self._cos_reference_latitude
+            )
+            y_coord = self._reference_y + y_values / (
+                self._angular_to_radians * EARTH_RADIUS_M
+            )
+        else:
+            x_coord = self._reference_x + x_values / self._linear_units_to_metres
+            y_coord = self._reference_y + y_values / self._linear_units_to_metres
+        return x_coord, y_coord
+
+    def distance(self, x1, y1, x2, y2):
+        metric_x1, metric_y1 = self.to_metric(x1, y1)
+        metric_x2, metric_y2 = self.to_metric(x2, y2)
+        return float(numpy.hypot(metric_x2 - metric_x1, metric_y2 - metric_y1))
+
+    def pixel_size_metres(self, raster):
+        center_x = raster.GetXCoordByCol(raster.NCol() // 2)
+        center_y = raster.GetYCoordByRow(raster.NRow() // 2)
+        x_size = self.distance(
+            center_x,
+            center_y,
+            center_x + raster.CellSize(),
+            center_y,
+        )
+        y_size = self.distance(
+            center_x,
+            center_y,
+            center_x,
+            center_y - raster.CellSizeY(),
+        )
+        return x_size, y_size
+
+
+class _ShorelineKDTree:
+    """Exact nearest-shoreline lookup in CRS-aware local metric space."""
+
+    def __init__(self, shoreline_raster, spatial_metric):
         if cKDTree is None:
             raise RuntimeError(
                 "SciPy is required for shoreline KDTree lookup. Install the 'scipy' package."
@@ -50,21 +200,33 @@ class _ShorelineKDTree:
         if cells.size == 0:
             raise ValueError("The shoreline raster contains no valid cells.")
         self._cells = cells.astype(numpy.float64, copy=False)
-        self._tree = cKDTree(self._cells)
+        self._raster = shoreline_raster
+        self._spatial_metric = spatial_metric
+        x_coords = (
+            shoreline_raster.XTopLeft()
+            + self._cells[:, 1] * shoreline_raster.CellSize()
+        )
+        y_coords = (
+            shoreline_raster.YTopLeft()
+            - self._cells[:, 0] * shoreline_raster.CellSizeY()
+        )
+        x_metres, y_metres = spatial_metric.to_metric(x_coords, y_coords)
+        self._tree = cKDTree(numpy.column_stack([x_metres, y_metres]))
 
     def __len__(self):
         return len(self._cells)
 
-    def nearest(self, row, col, cell_size):
-        """Return nearest shoreline row, column, and distance in configured metres."""
-        distance_pixels, cell_index = self._tree.query(
-            (float(row), float(col)), k=1
+    def nearest(self, x_coord, y_coord):
+        """Return nearest shoreline row, column, and automatically derived metric distance."""
+        x_metres, y_metres = self._spatial_metric.to_metric(x_coord, y_coord)
+        distance_metres, cell_index = self._tree.query(
+            (float(x_metres), float(y_metres)), k=1
         )
         target_row, target_col = self._cells[int(cell_index)]
         return (
             int(target_row),
             int(target_col),
-            float(distance_pixels) * float(cell_size),
+            float(distance_metres),
         )
 
 
@@ -87,7 +249,11 @@ def _ensure_real_field(layer, field_name, source_path):
 # =========================
 def _print_grid_info(name, R):
     try:
-        print(f"{name}: size=({R.NRow()},{R.NCol()}), cell={R.CellSize()}, origin=({R.XTopLeft()},{R.YTopLeft()})")
+        print(
+            f"{name}: size=({R.NRow()},{R.NCol()}), "
+            f"cell=({R.CellSize()},{R.CellSizeY()}), "
+            f"origin=({R.XTopLeft()},{R.YTopLeft()})"
+        )
     except Exception as e:
         print(f"{name}: print grid info failed: {e}")
 
@@ -159,7 +325,7 @@ def boundary_extraction(lakeareaRaster, progress_callback=None):
     boundaryRaster = rasterProcessing.Raster(
         lakeareaRaster.XTopLeft(), lakeareaRaster.YTopLeft(),
         lakeareaRaster.CellSize(), lakeareaRaster.NRow(),
-        lakeareaRaster.NCol(), -9999
+        lakeareaRaster.NCol(), -9999, yCellSize=lakeareaRaster.CellSizeY()
     )
     nodataValue = lakeareaRaster.NodataValue()
 
@@ -249,14 +415,27 @@ def getLakelevel(_workSP, lakeName, demFile=None):
     lakeshorelineFile = _lake_file(_workSP, lakeName, "_shoreline.tif")
     demFile = _resolve_dem_file(_workSP, lakeName, demFile)
     raster = rasterProcessing.RasterIO()
-    proj, im_geotrans, lakeRaster = raster.read_img(lakeshorelineFile)
-    proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
-    proj, im_geotrans, demRaster = raster.read_img(demFile)
+    lake_proj, im_geotrans, lakeRaster = raster.read_img(lakeshorelineFile)
+    slope_proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
+    dem_proj, im_geotrans, demRaster = raster.read_img(demFile)
+    _validate_matching_crs(
+        {
+            "shoreline": lake_proj,
+            "slope": slope_proj,
+            "DEM": dem_proj,
+        }
+    )
     boundaryList = []
     for row in range(0, lakeRaster.NRow()):
         for col in range(0, lakeRaster.NCol()):
-            if lakeRaster.GetValue(row, col) == 1 and slopeRaster.GetValue(row, col) < 1:
-                boundaryList.append(float(demRaster.GetValue(row, col)))
+            if lakeRaster.GetValue(row, col) != 1:
+                continue
+            x_coord = lakeRaster.GetXCoordByCol(col)
+            y_coord = lakeRaster.GetYCoordByRow(row)
+            slope_value = _sample_raster_at_xy(slopeRaster, x_coord, y_coord)
+            dem_value = _sample_raster_at_xy(demRaster, x_coord, y_coord)
+            if slope_value is not None and dem_value is not None and slope_value < 1:
+                boundaryList.append(dem_value)
 
     if len(boundaryList) == 0:
         return float('nan')
@@ -280,23 +459,32 @@ def determine_predictedpoints_info(
     progress_callback=None,
     shoreline_index=None,
     lakelevel=None,
+    spatial_metric=None,
 ):
     demFile = _resolve_dem_file(_with_sep(_workSP), _lakename, _demFile)
     slopeFile = _workSP + "\\" + _lakename + "_Slope.tif"
     lakeareaFile = _workSP + "\\" + _lakename + "_extent.tif"
     lakeshorelineFile = _workSP + "\\" + _lakename + "_shoreline.tif"
     raster = rasterProcessing.RasterIO()
-    proj, im_geotrans, demRaster = raster.read_img(demFile)
-    proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
-    proj, im_geotrans, lakeRaster = raster.read_img(lakeareaFile)
-    proj, im_geotrans, lakeshorelineRaster = raster.read_img(lakeshorelineFile)
+    dem_proj, im_geotrans, demRaster = raster.read_img(demFile)
+    slope_proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
+    lake_proj, im_geotrans, lakeRaster = raster.read_img(lakeareaFile)
+    shoreline_proj, im_geotrans, lakeshorelineRaster = raster.read_img(lakeshorelineFile)
+    _validate_matching_crs(
+        {
+            "lake extent": lake_proj,
+            "shoreline": shoreline_proj,
+            "DEM": dem_proj,
+            "slope": slope_proj,
+        }
+    )
+    if spatial_metric is None:
+        spatial_metric = _SpatialMetric(lake_proj, lakeRaster)
     _txtFile = _workSP + "\\" + _lakename + "\\MLData\\Test_" + str(_para_intervalList[0]) + ".txt"
     topoinfoList = []
-    nodataLakeShoreline = lakeshorelineRaster.NodataValue()
-
     _report_progress(progress_callback, 69, "Preparing prediction-point terrain data…")
     if shoreline_index is None:
-        shoreline_index = _ShorelineKDTree(lakeshorelineRaster)
+        shoreline_index = _ShorelineKDTree(lakeshorelineRaster, spatial_metric)
     if lakelevel is None:
         lakelevel = get_lakeLevel(lakeshorelineRaster, demRaster, slopeRaster)
     interval_count = max(1, len(_para_intervalList))
@@ -312,29 +500,29 @@ def determine_predictedpoints_info(
             for col in range(0, lakeRaster.NCol(), curInterval):
                 tempValue = lakeRaster.GetValue(row, col)
                 tempLakeSL = lakeshorelineRaster.GetValue(row, col)
-                if tempValue != lakeRaster.NodataValue() and abs(tempLakeSL - nodataLakeShoreline) < EPS:
-                    targetRow, targetCol, distance = shoreline_index.nearest(
-                        row, col, para_cellsize
-                    )
-                    if distance < 100:
-                        continue
+                if (
+                    _is_valid_raster_value(lakeRaster, tempValue)
+                    and not _is_valid_raster_value(lakeshorelineRaster, tempLakeSL)
+                ):
                     xLake = lakeRaster.GetXCoordByCol(col)
                     yLake = lakeRaster.GetYCoordByRow(row)
-                    xBoundary = lakeRaster.GetXCoordByCol(targetCol)
-                    yBoundary = lakeRaster.GetYCoordByRow(targetRow)
-                    angle = cf.cal_angle(xLake, yLake, xBoundary, yBoundary)
+                    targetRow, targetCol, distance = shoreline_index.nearest(xLake, yLake)
+                    if distance < 100:
+                        continue
+                    xBoundary = lakeshorelineRaster.GetXCoordByCol(targetCol)
+                    yBoundary = lakeshorelineRaster.GetYCoordByRow(targetRow)
                     info = get_topoInfo(
                         lakeRaster,
                         lakeshorelineRaster,
                         demRaster,
                         slopeRaster,
-                        angle,
                         distance,
                         xBoundary,
                         yBoundary,
                         xLake,
                         yLake,
                         lakelevel,
+                        spatial_metric,
                     )
                     if info != -1:
                         topoinfoList.append(info)
@@ -369,7 +557,7 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
         0.0,
         template_raster.YTopLeft(),
         0.0,
-        -template_raster.CellSize(),
+        -template_raster.CellSizeY(),
     )
     srs = osr.SpatialReference()
     srs.ImportFromWkt(proj_wkt)
@@ -410,14 +598,23 @@ def determine_surveypoints_info(
     # 读入模板栅格并对齐栅格化 Survey
     _report_progress(progress_callback, 30, "Opening survey terrain rasters…")
     raster = rasterProcessing.RasterIO()
-    proj, im_geotrans, demRaster = raster.read_img(demFile)
-    proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
-    proj, im_geotrans, lakeRaster = raster.read_img(lakeareaFile)
-    proj, im_geotrans, lakeshorelineRaster = raster.read_img(lakeshorelineFile)
+    dem_proj, im_geotrans, demRaster = raster.read_img(demFile)
+    slope_proj, im_geotrans, slopeRaster = raster.read_img(slopeFile)
+    lake_proj, im_geotrans, lakeRaster = raster.read_img(lakeareaFile)
+    shoreline_proj, im_geotrans, lakeshorelineRaster = raster.read_img(lakeshorelineFile)
+    _validate_matching_crs(
+        {
+            "lake extent": lake_proj,
+            "shoreline": shoreline_proj,
+            "DEM": dem_proj,
+            "slope": slope_proj,
+        }
+    )
+    spatial_metric = _SpatialMetric(lake_proj, lakeRaster)
 
     # ★ 用湖区模板进行重栅格化，确保逐像元对齐
     _report_progress(progress_callback, 34, "Rasterizing in-situ bathymetry points…")
-    rasterize_survey_to_template(survey_file, surveyRasterFile, lakeRaster, proj)
+    rasterize_survey_to_template(survey_file, surveyRasterFile, lakeRaster, lake_proj)
     proj, im_geotrans, surveyLineRaster = raster.read_img(surveyRasterFile)
 
     # 自检信息（需要可保留）
@@ -426,6 +623,13 @@ def determine_surveypoints_info(
     _print_grid_info("survey", surveyLineRaster)
     _print_grid_info("dem", demRaster)
     _print_grid_info("slope", slopeRaster)
+    lake_pixel_x, lake_pixel_y = spatial_metric.pixel_size_metres(lakeRaster)
+    dem_pixel_x, dem_pixel_y = spatial_metric.pixel_size_metres(demRaster)
+    print(
+        "automatic metric pixel size: "
+        f"lake=({lake_pixel_x:.3f},{lake_pixel_y:.3f}) m, "
+        f"DEM=({dem_pixel_x:.3f},{dem_pixel_y:.3f}) m"
+    )
     # 岸线非空抽样统计
     shore_cnt = 0
     step_r = max(1, lakeshorelineRaster.NRow() // 200)
@@ -440,7 +644,7 @@ def determine_surveypoints_info(
         lakelevel = get_lakeLevel(lakeshorelineRaster, demRaster, slopeRaster)
 
     _report_progress(progress_callback, 38, "Building the shoreline KDTree…")
-    shoreline_index = _ShorelineKDTree(lakeshorelineRaster)
+    shoreline_index = _ShorelineKDTree(lakeshorelineRaster, spatial_metric)
     print("shoreline KDTree cells:", len(shoreline_index))
 
     topoinfoList = []
@@ -453,31 +657,28 @@ def determine_surveypoints_info(
     for point_index, (row, col) in enumerate(survey_cells):
         row = int(row)
         col = int(col)
-        targetRow, targetCol, distance = shoreline_index.nearest(
-            row, col, para_cellsize
-        )
+        xLake = lakeRaster.GetXCoordByCol(col)
+        yLake = lakeRaster.GetYCoordByRow(row)
+        targetRow, targetCol, distance = shoreline_index.nearest(xLake, yLake)
 
         # 业务阈值：过近则跳过（你原来用 <10）
         if distance < 10:
             tooClose += 1
         else:
-            xBoundary = lakeRaster.GetXCoordByCol(targetCol)
-            yBoundary = lakeRaster.GetYCoordByRow(targetRow)
-            xLake = lakeRaster.GetXCoordByCol(col)
-            yLake = lakeRaster.GetYCoordByRow(row)
-            angle = cf.cal_angle(xLake, yLake, xBoundary, yBoundary)
+            xBoundary = lakeshorelineRaster.GetXCoordByCol(targetCol)
+            yBoundary = lakeshorelineRaster.GetYCoordByRow(targetRow)
             info = get_topoInfo(
                 lakeRaster,
                 lakeshorelineRaster,
                 demRaster,
                 slopeRaster,
-                angle,
                 distance,
                 xBoundary,
                 yBoundary,
                 xLake,
                 yLake,
                 lakelevel,
+                spatial_metric,
             )
 
             if info == -1:
@@ -508,147 +709,114 @@ def determine_surveypoints_info(
     print(f"❌ 找不到边界: {noBoundary}")
     print(f"❌ 提取地形失败: {failedTopo}")
     print("================================\n")
-    return shoreline_index, float(lakelevel)
+    return shoreline_index, float(lakelevel), spatial_metric
 
 # =========================
-# 7) 计算沿射线的地形信息（原逻辑保留）
+# 7) 计算沿真实米制射线的地形信息
 # =========================
 def get_topoInfo(
     _lakeRaster,
     _lakeshorelineRaster,
     _demRaster,
     _slopeRaster,
-    _angle,
     _distance,
     _coordX,
     _coordY,
     _coordLX,
     _coordLY,
     _lakelevel=None,
+    _spatial_metric=None,
 ):
-    maxBuffer = 1000
+    max_buffer_metres = 1000.0
+    target_distances = (300.0, 600.0, 900.0)
     lakelevel = (
         float(_lakelevel)
         if _lakelevel is not None
         else get_lakeLevel(_lakeshorelineRaster, _demRaster, _slopeRaster)
     )
-    maxNum = int(maxBuffer / para_cellsize)
-    if _angle >= 0 and _angle < math.pi / 4:
-        position = 1
-        xflag = 1
-        yflag = 1
-    elif _angle >= math.pi / 4 and _angle < math.pi / 2:
-        position = 2
-        xflag = 1
-        yflag = 1
-        _angle = math.pi / 2 - _angle
-    elif _angle >= math.pi / 2 and _angle < math.pi * 3 / 4:
-        position = 3
-        xflag = -1
-        yflag = 1
-        _angle = _angle - math.pi / 2
-    elif _angle >= math.pi * 3 / 4 and _angle < math.pi:
-        position = 4
-        xflag = -1
-        yflag = 1
-        _angle = math.pi - _angle
-    elif _angle >= math.pi and _angle < math.pi * 5 / 4:
-        position = 5
-        xflag = -1
-        yflag = -1
-        _angle = _angle - math.pi
-    elif _angle >= math.pi * 5 / 4 and _angle < math.pi * 6 / 4:
-        position = 6
-        xflag = -1
-        yflag = -1
-        _angle = math.pi * 6 / 4 - _angle
-    elif _angle >= math.pi * 6 / 4 and _angle < math.pi * 7 / 4:
-        position = 7
-        xflag = 1
-        yflag = -1
-        _angle = _angle - math.pi * 6 / 4
-    elif _angle >= math.pi * 7 / 4 and _angle <= 2 * math.pi:
-        position = 8
-        xflag = 1
-        yflag = -1
-        _angle = 2 * math.pi - _angle
-
-    curNum = 0
-    cellsize = _demRaster.CellSize()
-    nodataDEM = _demRaster.NodataValue()
-
-    rowIndex = []
-    colIndex = []
-    eleList = []
-    slopeList = []
-    distanceList = []
-    coordList = []
-    curRow = _lakeRaster.GetRowbyYCoord(_coordY)
-    curCol = _lakeRaster.GetColbyXCoord(_coordX)
-    xCoordCur = _coordX
-    yCoordCur = _coordY
-    index = curRow * _lakeRaster.NCol() + curCol
-    while curNum < maxNum and abs(_demRaster.GetValue(curRow, curCol) - nodataDEM) > EPS:
-        pixelisChange = 0
-        while pixelisChange == 0:
-            if position == 1 or position == 8 or position == 4 or position == 5:
-                xCoordCur = xCoordCur + xflag * cellsize
-                yCoordCur = yCoordCur + yflag * cellsize * math.tan(_angle)
-            elif position == 2 or position == 3 or position == 6 or position == 7:
-                yCoordCur = yCoordCur + yflag * cellsize
-                xCoordCur = xCoordCur + xflag * cellsize * math.tan(_angle)
-            nextRow = _lakeRaster.GetRowbyYCoord(yCoordCur)
-            nextCol = _lakeRaster.GetColbyXCoord(xCoordCur)
-            if (curRow != nextRow or curCol != nextCol):
-                pixelisChange = 1
-        if curNum == 0:
-            distanceList.append(90)
-        else:
-            distanceList.append(distanceList[curNum - 1] + cf.isDiagonalDirection(curRow, curCol, nextRow, nextCol) * para_cellsize)
-        coordInfo = str(xCoordCur) + " " + str(yCoordCur) + " " + str(index)
-        coordList.append(coordInfo)
-
-        curRow = nextRow
-        curCol = nextCol
-        curNum = curNum + 1
-        rowIndex.append(curRow)
-        colIndex.append(curCol)
-        if abs(_demRaster.GetValue(curRow, curCol) - _demRaster.NodataValue()) > EPS:
-            eleList.append(_demRaster.GetValue(curRow, curCol))
-        if abs(_slopeRaster.GetValue(curRow, curCol) - _slopeRaster.NodataValue()) > EPS:
-            slopeList.append(_slopeRaster.GetValue(curRow, curCol))
-
-    index1 = int(300 / para_cellsize)
-    index2 = int(600 / para_cellsize)
-    index3 = int(900 / para_cellsize)
-
-    preIndex = 0
-    if index1 >= len(slopeList) - 1 or len(eleList) == 0:
+    if not numpy.isfinite(lakelevel):
         return -1
-    for index in range(0, len(slopeList)):
 
-        if preIndex <= index1 and index > index1:
-            slope_300 = numpy.mean(slopeList[:preIndex]) if preIndex > 0 else numpy.mean(slopeList[:index1+1])
-            diffEle_300 = numpy.mean(eleList[:preIndex]) - lakelevel if preIndex > 0 else numpy.mean(eleList[:index1+1]) - lakelevel
-            gradient_300 = float((eleList[preIndex] - eleList[0]) / distanceList[preIndex]) if preIndex > 0 else 0.0
-            slope_600 = slope_300
-            diffEle_600 = diffEle_300
-            gradient_600 = gradient_300
-            slope_900 = slope_300
-            diffEle_900 = diffEle_300
-            gradient_900 = gradient_300
-        elif preIndex <= index2:
-            slope_600 = numpy.mean(slopeList[:preIndex]) if preIndex > 0 else numpy.mean(slopeList[:index2+1])
-            diffEle_600 = numpy.mean(eleList[:preIndex]) - lakelevel if preIndex > 0 else numpy.mean(eleList[:index2+1]) - lakelevel
-            gradient_600 = float((eleList[preIndex] - eleList[0]) / distanceList[preIndex]) if preIndex > 0 else 0.0
-            slope_900 = slope_600
-            diffEle_900 = diffEle_600
-            gradient_900 = gradient_600
-        elif preIndex <= index3:
-            slope_900 = numpy.mean(slopeList[:preIndex]) if preIndex > 0 else numpy.mean(slopeList[:index3+1])
-            diffEle_900 = numpy.mean(eleList[:preIndex]) - lakelevel if preIndex > 0 else numpy.mean(eleList[:index3+1]) - lakelevel
-            gradient_900 = float((eleList[preIndex] - eleList[0]) / distanceList[preIndex]) if preIndex > 0 else 0.0
-        preIndex = index
+    spatial_metric = _spatial_metric
+    if spatial_metric is None:
+        raise ValueError("Spatial metric is required for terrain-feature extraction.")
+
+    boundary_x_metres, boundary_y_metres = spatial_metric.to_metric(_coordX, _coordY)
+    lake_x_metres, lake_y_metres = spatial_metric.to_metric(_coordLX, _coordLY)
+    direction_x = float(boundary_x_metres - lake_x_metres)
+    direction_y = float(boundary_y_metres - lake_y_metres)
+    direction_length = math.hypot(direction_x, direction_y)
+    if direction_length <= EPS:
+        return -1
+    direction_x /= direction_length
+    direction_y /= direction_length
+
+    dem_pixel_sizes = spatial_metric.pixel_size_metres(_demRaster)
+    slope_pixel_sizes = spatial_metric.pixel_size_metres(_slopeRaster)
+    sample_step_metres = max(
+        1.0,
+        min(dem_pixel_sizes + slope_pixel_sizes),
+    )
+    regular_distances = numpy.arange(
+        0.0,
+        max_buffer_metres + sample_step_metres * 0.5,
+        sample_step_metres,
+        dtype=numpy.float64,
+    )
+    sample_distances = sorted(
+        set(float(distance) for distance in regular_distances)
+        | {0.0, *target_distances, max_buffer_metres}
+    )
+
+    samples = []
+    samples_by_distance = {}
+    for distance_metres in sample_distances:
+        sample_x_metres = float(boundary_x_metres) + direction_x * distance_metres
+        sample_y_metres = float(boundary_y_metres) + direction_y * distance_metres
+        x_coord, y_coord = spatial_metric.from_metric(sample_x_metres, sample_y_metres)
+        x_coord = float(x_coord)
+        y_coord = float(y_coord)
+        elevation = _sample_raster_at_xy(_demRaster, x_coord, y_coord)
+        slope = _sample_raster_at_xy(_slopeRaster, x_coord, y_coord)
+        if elevation is None or slope is None:
+            break
+        sample = (distance_metres, elevation, slope)
+        samples.append(sample)
+        samples_by_distance[distance_metres] = sample
+
+    # At least the first 300 m must be present.  For legacy workspaces whose
+    # surrounding DEM ends between 300 and 900 m, later windows use the
+    # farthest genuinely sampled metric distance instead of inventing pixels.
+    if 0.0 not in samples_by_distance or target_distances[0] not in samples_by_distance:
+        return -1
+
+    boundary_elevation = samples_by_distance[0.0][1]
+    slopes = []
+    elevation_differences = []
+    gradients = []
+    for target_distance in target_distances:
+        effective_sample = samples_by_distance.get(target_distance)
+        if effective_sample is None:
+            candidates = [sample for sample in samples if sample[0] < target_distance]
+            if not candidates:
+                return -1
+            effective_sample = candidates[-1]
+        effective_distance = effective_sample[0]
+        target_samples = [sample for sample in samples if sample[0] <= effective_distance]
+        target_elevation = effective_sample[1]
+        slopes.append(float(numpy.mean([sample[2] for sample in target_samples])))
+        elevation_differences.append(
+            float(numpy.mean([sample[1] for sample in target_samples]) - lakelevel)
+        )
+        gradients.append(
+            float((target_elevation - boundary_elevation) / effective_distance)
+            if effective_distance > 0
+            else 0.0
+        )
+
+    slope_300, slope_600, slope_900 = slopes
+    diffEle_300, diffEle_600, diffEle_900 = elevation_differences
+    gradient_300, gradient_600, gradient_900 = gradients
     topoInfo = (
         str(_coordX) + "," + str(_coordY) + "," + str(_coordLX) + "," + str(_coordLY) + "," +
         str(slope_300) + "," + str(slope_600) + "," + str(slope_900) + "," +
@@ -662,14 +830,17 @@ def get_topoInfo(
 # 8) 湖泊水位（边界中位高程）
 # =========================
 def get_lakeLevel(_lakeshorelineRaster, _demRaster, _slopeRaster):
-    nodataLakeshoreline = _lakeshorelineRaster.NodataValue()
     LakeShoreLine = []
     for row in range(0, _lakeshorelineRaster.NRow()):
         for col in range(0, _lakeshorelineRaster.NCol()):
             tempLake = _lakeshorelineRaster.GetValue(row, col)
-            tempSlope = _slopeRaster.GetValue(row, col)
-            tempEle = _demRaster.GetValue(row, col)
-            if tempLake != nodataLakeshoreline and tempSlope < 1:
+            if not _is_valid_raster_value(_lakeshorelineRaster, tempLake):
+                continue
+            x_coord = _lakeshorelineRaster.GetXCoordByCol(col)
+            y_coord = _lakeshorelineRaster.GetYCoordByRow(row)
+            tempSlope = _sample_raster_at_xy(_slopeRaster, x_coord, y_coord)
+            tempEle = _sample_raster_at_xy(_demRaster, x_coord, y_coord)
+            if tempSlope is not None and tempEle is not None and tempSlope < 1:
                 LakeShoreLine.append(tempEle)
     if len(LakeShoreLine) == 0:
         return float('nan')
@@ -684,13 +855,13 @@ def runPredictedPoints(
     param2,
     param3,
     param4,
-    param5,
+    param5=None,
     param6=None,
     param7=None,
     progress_callback=None,
     lake_polygon_file=None,
+    survey_file=None,
 ):
-    global para_cellsize  # 处理的像元大小（米）
     print('++++++++++++++++start+++++++++++++++++++++')
     
     ############## 输入数据 ####################
@@ -698,9 +869,8 @@ def runPredictedPoints(
     lakeName = [resolved_lake]       # 输入需要进行处理的湖泊
     intervalList = [param3]   # 生成的预测点间隔（像元）
     para_Window = param4      # 窗口大小（未使用）
-    para_cellsize = param5    # 处理的像元大小（米）
     demFile = param6
-    surveyFile = param7
+    surveyFile = survey_file if survey_file is not None else param7
     ############# 输入数据 ####################
 
     _report_progress(progress_callback, 0, "Preparing prediction-point generation…")
@@ -717,7 +887,7 @@ def runPredictedPoints(
             progress_callback,
             lakePolygonFile=lake_polygon_file,
         )
-        shoreline_index, lakelevel = determine_surveypoints_info(
+        shoreline_index, lakelevel, spatial_metric = determine_surveypoints_info(
             dataDir,
             lakeName[lakeIndex],
             demFile,
@@ -733,5 +903,6 @@ def runPredictedPoints(
             progress_callback,
             shoreline_index=shoreline_index,
             lakelevel=lakelevel,
+            spatial_metric=spatial_metric,
         )
     _report_progress(progress_callback, 100, "Prediction points completed.")
