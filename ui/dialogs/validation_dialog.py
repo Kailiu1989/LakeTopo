@@ -27,7 +27,7 @@ class ValidationDialog(QDialog):
     # 信号：传回 (功能模式, 参数字典)
     run_signal = pyqtSignal(str, dict)
 
-    def __init__(self, mode="accuracy", parent=None):
+    def __init__(self, mode="accuracy", parent=None, default_workspace=""):
         """
         :param mode: 
             - 'accuracy': 预测点精度 (Prediction Accuracy)
@@ -35,6 +35,7 @@ class ValidationDialog(QDialog):
         """
         super().__init__(parent)
         self.mode = mode
+        self.default_workspace = default_workspace or ""
         self.setObjectName("ValidationDialog")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -173,6 +174,8 @@ class ValidationDialog(QDialog):
         if self.mode == "accuracy":
             # 1) 工作路径 (选择文件夹)
             self.widgets['work_path'] = self.create_input_row("Workspace Path:", "D:/input_data/", browse=True, folder_mode=True)
+            if self.default_workspace:
+                self.widgets['work_path'].setText(self.default_workspace)
             
             # 2) 湖泊名称
             # 3) 间隔 (数值类型，Gold 样式)

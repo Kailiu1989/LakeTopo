@@ -24,9 +24,17 @@ class BathymetryDialog(QDialog):
     # 信号：传回 (功能模式, 参数字典)
     run_signal = pyqtSignal(str, dict)
 
-    def __init__(self, mode="pred_loc", parent=None):
+    def __init__(
+        self,
+        mode="pred_loc",
+        parent=None,
+        default_workspace="",
+        prefill_values=None,
+    ):
         super().__init__(parent)
         self.mode = mode
+        self.default_workspace = default_workspace or ""
+        self.prefill_values = dict(prefill_values or {})
         self.setObjectName("BathymetryDialog")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -166,6 +174,8 @@ class BathymetryDialog(QDialog):
         # 1. 生成预测点位置 OR 2. 生成预测点深度 (UI基本一致)
         if self.mode in ["pred_loc", "pred_depth"]:
             self.widgets['work_path'] = self.create_input_row("Workspace Path:", "D:/input_data/", browse=True, folder_mode=True)
+            if self.default_workspace:
+                self.widgets['work_path'].setText(self.default_workspace)
             if self.mode == "pred_loc":
                 self.widgets['lake_polygon_path'] = self.create_input_row(
                     "Lake Polygon:",
@@ -251,6 +261,11 @@ class BathymetryDialog(QDialog):
                 file_filter="GeoTIFF Files (*.tif *.tiff);;All Files (*)",
                 default_ext=".tif"
             )
+
+        for key, value in self.prefill_values.items():
+            widget = self.widgets.get(key)
+            if isinstance(widget, QLineEdit) and value:
+                widget.setText(str(value))
 
     def create_input_row(
         self,

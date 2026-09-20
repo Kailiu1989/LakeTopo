@@ -134,7 +134,7 @@ class pyjsCon(QObject):
 
     @pyqtSlot(str)
     def jsMethod_GetPickData(self, value):
-        QMessageBox.information(None, "提示", "点击的数据: {}".format(value))
+        QMessageBox.information(None, "Data Info", "Selected data: {}".format(value))
 
     @pyqtSlot(str)
     def jsMethod_ReadFile(self, value):

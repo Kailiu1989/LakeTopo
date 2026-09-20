@@ -99,6 +99,8 @@ class PagePreprocess(QWidget):
         super().__init__()
         self.side_buttons = []
         self.workspace_dir = None # 存储当前工作空间路径
+        self.shoreline_path = None
+        self.merit_dem_path = None
         self._projection_thread = None
         self._projection_worker = None
         self._projection_progress = None
@@ -503,10 +505,30 @@ class PagePreprocess(QWidget):
                 os.makedirs(os.path.join(path, sub), exist_ok=True)
 
             self.workspace_dir = os.path.normpath(path) # 保存到类变量中
+            workspace_name = os.path.basename(self.workspace_dir)
+            shoreline_candidate = os.path.join(self.workspace_dir, "shoreline.shp")
+            merit_candidate = os.path.join(
+                self.workspace_dir,
+                f"{workspace_name}_merit.tif",
+            )
+            self.shoreline_path = (
+                shoreline_candidate if os.path.isfile(shoreline_candidate) else None
+            )
+            self.merit_dem_path = (
+                merit_candidate if os.path.isfile(merit_candidate) else None
+            )
             action = "loaded" if existed else "created"
             QMessageBox.information(self, "Success", f"Workspace {action} at:\n{self.workspace_dir}")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
+
+    def get_workspace_context(self):
+        """Return workspace outputs that can prefill downstream dialogs."""
+        return {
+            "workspace_dir": self.workspace_dir or "",
+            "shoreline_path": self.shoreline_path or "",
+            "merit_dem_path": self.merit_dem_path or "",
+        }
 
     @classmethod
     def create_wgs84_shoreline(cls, input_shp, output_shp):
@@ -865,6 +887,9 @@ class PagePreprocess(QWidget):
             shoreline_count = self.create_wgs84_shoreline(
                 lake_shp, shoreline_output
             )
+
+            self.shoreline_path = os.path.normpath(shoreline_output)
+            self.merit_dem_path = os.path.normpath(dem_output)
 
             QMessageBox.information(
                 self,

@@ -173,16 +173,6 @@ class PreprocessDialog(QDialog):
                 # style="Gold" 表示这是数值参数，高亮显示
                 self.widgets['buffer_dist'] = self.create_input_row("Buffer Distance (m):", "1000", style="Gold", is_value=True)
 
-                note = QLabel(
-                    "Also outputs <workspace>_extent.tif and shoreline.shp; "
-                    "shoreline.shp is explicitly reprojected to WGS84 (EPSG:4326)."
-                )
-                note.setWordWrap(True)
-                note.setStyleSheet(
-                    "color: #73cfc1; font-size: 13px; background: transparent; padding: 4px 2px;"
-                )
-                self.form_layout.addWidget(note)
-
             # 3. 批量投影转换到 WGS84 (EPSG:4326)
             elif self.mode == "projection_wgs84":
                 self.widgets['input_files'] = self.create_input_row(
@@ -191,14 +181,6 @@ class PreprocessDialog(QDialog):
                     browse=True,
                     multi_files=True,
                 )
-                note = QLabel(
-                    "Output: source folder / original_name_wgs84.ext   •   CRS: EPSG:4326"
-                )
-                note.setWordWrap(True)
-                note.setStyleSheet(
-                    "color: #73cfc1; font-size: 13px; background: transparent; padding: 4px 2px;"
-                )
-                self.form_layout.addWidget(note)
 
     def create_input_row(self, label_text, placeholder, browse=False, style="Green",
                          folder_mode=False, is_value=False, multi_files=False):
