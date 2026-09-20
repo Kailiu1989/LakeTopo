@@ -2,6 +2,7 @@ import os
 import shutil
 import numpy as np
 from osgeo import gdal, ogr
+from scipy.ndimage import distance_transform_edt
 import Common_Function as cf
 
 from PyQt5.QtWidgets import (
@@ -30,6 +31,77 @@ try:
     from ui.dialogs.bathymetry_dialog import BathymetryDialog
 except ImportError:
     pass
+
+
+def _correct_shoreline_spikes(
+    elevation,
+    valid_mask,
+    minimum_excess=0.5,
+    maximum_distance=3.0,
+):
+    """Remove the constant-height shoreline artifact from an elevation DEM.
+
+    The shoreline reference height is the dominant value 4–8 pixels inside
+    the valid raster footprint. Correction is deliberately conservative: it
+    is applied only when that ring is at least 80% flat and all anomalous edge
+    pixels share one exact height. This avoids flattening a varied natural
+    shoreline slope.
+    """
+    corrected = np.array(elevation, copy=True)
+    valid = np.asarray(valid_mask, dtype=bool) & np.isfinite(corrected)
+    result = {
+        "corrected_pixels": 0,
+        "shore_height": None,
+        "spike_height": None,
+        "reason": "",
+    }
+
+    if not valid.any():
+        result["reason"] = "the raster has no valid elevation pixels"
+        return corrected, result
+    if valid.all():
+        result["reason"] = "the raster has no invalid footprint boundary"
+        return corrected, result
+
+    distance = distance_transform_edt(valid)
+    reference_ring = valid & (distance >= 4.0) & (distance <= 8.0)
+    reference_count = int(reference_ring.sum())
+    if reference_count == 0:
+        result["reason"] = "no valid 4–8 pixel shoreline reference ring was found"
+        return corrected, result
+
+    values, counts = np.unique(corrected[reference_ring], return_counts=True)
+    mode_index = int(np.argmax(counts))
+    shore_height = values[mode_index]
+    mode_fraction = float(counts[mode_index]) / reference_count
+    result["shore_height"] = float(shore_height)
+    if mode_fraction < 0.8:
+        result["reason"] = (
+            "the shoreline reference ring is not sufficiently flat "
+            f"(dominant value share {mode_fraction:.1%})"
+        )
+        return corrected, result
+
+    spikes = (
+        valid
+        & (distance <= float(maximum_distance))
+        & (corrected > shore_height + float(minimum_excess))
+    )
+    spike_values = np.unique(corrected[spikes])
+    if spike_values.size == 0:
+        result["reason"] = "no anomalous shoreline pixels were detected"
+        return corrected, result
+    if spike_values.size > 1:
+        result["reason"] = (
+            "candidate shoreline pixels have multiple heights; correction "
+            "was skipped to preserve the natural slope"
+        )
+        return corrected, result
+
+    result["spike_height"] = float(spike_values[0])
+    result["corrected_pixels"] = int(spikes.sum())
+    corrected[spikes] = shore_height
+    return corrected, result
 
 
 class PredictionWorker(QObject):
@@ -95,9 +167,15 @@ class PredictionWorker(QObject):
             self.failed.emit(self.mode, str(exc))
 
 class PageBathymetry(QWidget):
-    def __init__(self):
+    def __init__(self, workspace_provider=None, preprocess_context_provider=None):
         super().__init__()
         self.side_buttons = []
+        self.workspace_provider = workspace_provider
+        self.preprocess_context_provider = preprocess_context_provider
+        self._workspace_context_key = ""
+        self.predicted_depth_points_path = ""
+        self.terrain_output_path = ""
+        self.elevation_output_path = ""
         self._prediction_thread = None
         self._prediction_worker = None
         self._prediction_progress = None
@@ -154,10 +232,69 @@ class PageBathymetry(QWidget):
         self.side_buttons.append(btn)
         layout.addWidget(btn, 0, Qt.AlignHCenter)
 
+    @staticmethod
+    def _latest_shapefile(folder_path):
+        """Return the most recently modified SHP directly inside a folder."""
+        if not folder_path or not os.path.isdir(folder_path):
+            return ""
+        try:
+            candidates = [
+                entry.path
+                for entry in os.scandir(folder_path)
+                if entry.is_file() and entry.name.lower().endswith(".shp")
+            ]
+            if not candidates:
+                return ""
+            latest = max(
+                candidates,
+                key=lambda path: (os.path.getmtime(path), path.lower()),
+            )
+            return os.path.normpath(latest)
+        except OSError:
+            return ""
+
     def show_dialog(self, mode):
         QApplication.processEvents()
         try:
-            dialog = BathymetryDialog(mode, self)
+            workspace_path = (
+                self.workspace_provider()
+                if callable(self.workspace_provider)
+                else ""
+            )
+            workspace_key = (
+                os.path.normcase(os.path.abspath(workspace_path))
+                if workspace_path
+                else ""
+            )
+            if workspace_key != self._workspace_context_key:
+                self._workspace_context_key = workspace_key
+                self.predicted_depth_points_path = ""
+                self.terrain_output_path = ""
+                self.elevation_output_path = ""
+            if mode == "terrain":
+                self.predicted_depth_points_path = self._latest_shapefile(
+                    os.path.join(workspace_path, "temp_ML")
+                    if workspace_path
+                    else ""
+                )
+            preprocess_context = (
+                self.preprocess_context_provider()
+                if callable(self.preprocess_context_provider)
+                else {}
+            ) or {}
+            prefill_values = {
+                "depth_shp": self.predicted_depth_points_path,
+                "breakline": preprocess_context.get("shoreline_path", ""),
+                "surround_dem": preprocess_context.get("merit_dem_path", ""),
+                "depth_raster": self.terrain_output_path,
+                "lake_dem": self.elevation_output_path,
+            }
+            dialog = BathymetryDialog(
+                mode,
+                self,
+                default_workspace=workspace_path,
+                prefill_values=prefill_values,
+            )
             if hasattr(dialog, 'run_signal'):
                 dialog.run_signal.connect(self.api_handle_result)
             dialog.exec_()
@@ -184,6 +321,15 @@ class PageBathymetry(QWidget):
     # =========================================================================
     def api_handle_result(self, mode, data):
         print(f"[Bathymetry Logic] Task: {mode} | Data: {data}")
+
+        if mode == "terrain":
+            output_path = data.get("out_dem", "").strip()
+            if output_path:
+                self.terrain_output_path = os.path.normpath(output_path)
+        elif mode == "elevation":
+            output_path = data.get("out_raster", "").strip()
+            if output_path:
+                self.elevation_output_path = os.path.normpath(output_path)
         
         try:
             if mode == "pred_loc":
@@ -496,22 +642,59 @@ class PageBathymetry(QWidget):
         
         driver = gdal.GetDriverByName('GTiff')
         out_ds = driver.CreateCopy(out_raster, ds, 0)
+        if not out_ds:
+            ds = None
+            raise Exception("Cannot create output elevation raster.")
         band = out_ds.GetRasterBand(1)
         nodata = band.GetNoDataValue()
         
         # 逐块处理或整体处理（此处假设内存够，整体处理）
         arr = band.ReadAsArray()
+        if arr is None:
+            out_ds = None
+            ds = None
+            raise Exception("Cannot read depth raster values.")
+
+        # Use both the GDAL validity mask and finite-value check so numeric and
+        # NaN NoData values are handled consistently.
+        mask_band = band.GetMaskBand()
+        raster_mask = mask_band.ReadAsArray() if mask_band else None
+        valid_mask = np.isfinite(arr)
+        if raster_mask is not None:
+            valid_mask &= raster_mask > 0
+        if nodata is not None and np.isfinite(nodata):
+            valid_mask &= arr != nodata
         
         # 处理有效值
-        if nodata is not None:
-            mask = (arr != nodata)
-            arr[mask] = base_elev - arr[mask]
-        else:
-            arr = base_elev - arr
-            
+        arr[valid_mask] = base_elev - arr[valid_mask]
+
+        # Remove the narrow constant-height high-value artifact sometimes
+        # produced along the valid lake footprint before the DEM is saved.
+        arr, shoreline_result = _correct_shoreline_spikes(arr, valid_mask)
         band.WriteArray(arr)
-        out_ds = None # Save
-        QMessageBox.information(self, "Success", f"Elevation adjustment done.\nBase Level: {base_elev:.2f}m")
+        band.FlushCache()
+        out_ds.FlushCache()
+        out_ds = None  # Save
+        ds = None
+
+        corrected_count = shoreline_result["corrected_pixels"]
+        if corrected_count:
+            print(
+                "Shoreline correction: "
+                f"shore={shoreline_result['shore_height']:.4f} m, "
+                f"spike={shoreline_result['spike_height']:.4f} m, "
+                f"corrected={corrected_count:,} pixels"
+            )
+        else:
+            print(f"Shoreline correction skipped: {shoreline_result['reason']}")
+
+        QMessageBox.information(
+            self,
+            "Success",
+            "Elevation adjustment done.\n"
+            f"Base Level: {base_elev:.2f}m\n"
+            f"Shoreline spikes corrected: {corrected_count:,}",
+        )
 
     def logic_mosaic(self, data):
         """DEM 镶嵌"""

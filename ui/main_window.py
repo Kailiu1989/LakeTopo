@@ -587,9 +587,18 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.setStyleSheet("background: transparent;")
         self.page_preprocess = PagePreprocess()
-        self.page_bathymetry = PageBathymetry()
+        workspace_provider = lambda: self.page_preprocess.workspace_dir
+        preprocess_context_provider = (
+            lambda: self.page_preprocess.get_workspace_context()
+        )
+        self.page_bathymetry = PageBathymetry(
+            workspace_provider=workspace_provider,
+            preprocess_context_provider=preprocess_context_provider,
+        )
         self.page_volume = PageVolume()
-        self.page_validation = PageValidation()
+        self.page_validation = PageValidation(
+            workspace_provider=workspace_provider
+        )
         self.page_help = PageHelp()
         self.stack.addWidget(self.page_preprocess)
         self.stack.addWidget(self.page_bathymetry)

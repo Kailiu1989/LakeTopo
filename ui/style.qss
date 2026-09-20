@@ -9,6 +9,14 @@ QWidget {
     color: #ffffff;
 }
 
+/* Native progress dialogs use a light background, so keep all text dark. */
+QProgressDialog,
+QProgressDialog QLabel,
+QProgressDialog QProgressBar,
+QProgressDialog QPushButton {
+    color: #000000;
+}
+
 QMainWindow {
     background-color: #050a0c;
 }

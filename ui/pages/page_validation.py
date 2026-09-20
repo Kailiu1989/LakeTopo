@@ -19,9 +19,10 @@ except ImportError:
     pass
 
 class PageValidation(QWidget):
-    def __init__(self):
+    def __init__(self, workspace_provider=None):
         super().__init__()
         self.side_buttons = []
+        self.workspace_provider = workspace_provider
         self.init_ui()
 
     def init_ui(self):
@@ -72,7 +73,16 @@ class PageValidation(QWidget):
     def show_dialog(self, mode):
         QApplication.processEvents()
         try:
-            dialog = ValidationDialog(mode, self)
+            workspace_path = (
+                self.workspace_provider()
+                if callable(self.workspace_provider)
+                else ""
+            )
+            dialog = ValidationDialog(
+                mode,
+                self,
+                default_workspace=workspace_path,
+            )
             if hasattr(dialog, 'run_signal'):
                 dialog.run_signal.connect(self.api_handle_result)
             dialog.exec_()
