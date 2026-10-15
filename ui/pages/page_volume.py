@@ -1,10 +1,10 @@
 import os
 import csv
-import shutil
 import numpy as np
 from matplotlib.figure import Figure
-from osgeo import gdal, ogr, osr
+from osgeo import gdal, osr
 import Common_Function as cf
+from dem_builder import get_largest_polygon_rings
 
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QFrame,
                              QApplication, QScrollArea, QMessageBox, QProgressDialog)
@@ -255,34 +255,48 @@ class PageVolume(QWidget):
         湖泊水量计算逻辑
         Keys: 'ref_elev', 'lake_dem', 'lake_shp', 'out_csv'
         """
-        try:
-            base_elevation = float(data.get('ref_elev', 0))
-        except ValueError:
-            QMessageBox.warning(self, "Error", "Reference elevation must be a number.")
-            return
+        reference = data.get('ref_elev')
+        reference_text = str(reference).strip() if reference is not None else ''
 
         dem_raster_path = data.get('lake_dem', '')
         output_csv_path = data.get('out_csv', '')
-        lake_shapefile_path = data.get('lake_shp', '')
+        lake_shapefile_path = data.get('lake_shp', '').strip()
 
         if not os.path.exists(dem_raster_path):
             QMessageBox.warning(self, "Error", "Lake DEM file not found.")
             return
 
         try:
-            # 如果提供了湖泊面SHP，尝试自动计算基准高程
-            if lake_shapefile_path and os.path.exists(lake_shapefile_path):
+            # A supplied SHP takes precedence over manual input. Only use the
+            # numeric reference when no SHP was provided; never fall back silently.
+            if lake_shapefile_path:
+                if not os.path.isfile(lake_shapefile_path):
+                    QMessageBox.warning(self, "Error", "Lake Polygon SHP file not found.")
+                    return
                 ok, message = cf.check_spatial_references_match([dem_raster_path, lake_shapefile_path])
                 if not ok:
                     QMessageBox.warning(self, "Projection Mismatch", message)
                     return
                 print("Calculating shore elevation from Shapefile...")
+                base_elevation = self.calculate_shore_elevation(lake_shapefile_path, dem_raster_path)
+                if not np.isfinite(base_elevation):
+                    raise ValueError("No finite reference elevation could be calculated from the shoreline.")
+                print(f"Auto-calculated Elevation: {base_elevation}")
+            elif reference_text:
                 try:
-                    calculated_elev = self.calculate_shore_elevation(lake_shapefile_path, dem_raster_path)
-                    print(f"Auto-calculated Elevation: {calculated_elev}")
-                    base_elevation = calculated_elev
-                except Exception as e:
-                    print(f"Auto-calculation failed, using manual input: {e}")
+                    base_elevation = float(reference_text)
+                    if not np.isfinite(base_elevation):
+                        raise ValueError
+                except ValueError:
+                    QMessageBox.warning(self, "Error", "Reference elevation must be a finite number.")
+                    return
+            else:
+                QMessageBox.warning(
+                    self, "Error",
+                    "Provide Lake Polygon SHP for automatic reference elevation, "
+                    "or enter Reference Elevation explicitly.",
+                )
+                return
 
             # GDAL 处理
             dem_raster_ds = gdal.Open(dem_raster_path)
@@ -302,7 +316,10 @@ class PageVolume(QWidget):
             
             total_volume = 0
             # 向量化计算：只计算有效且低于基准面的点
-            valid_mask = (~np.isnan(dem_data)) & (dem_data < base_elevation)
+            valid_dem = np.isfinite(dem_data)
+            if not valid_dem.any():
+                raise ValueError("Lake DEM contains no valid elevation pixels.")
+            valid_mask = valid_dem & (dem_data < base_elevation)
             depths = base_elevation - dem_data
             total_volume = np.nansum(depths[valid_mask] * pixel_area[valid_mask])
 
@@ -312,7 +329,7 @@ class PageVolume(QWidget):
             # 保存 CSV
             self.save_to_csv(output_csv_path, total_volume)
             
-            QMessageBox.information(self, "Success", f"Volume Calculation Completed.\nTotal Volume: {total_volume:.4f} (10^8 m³)\nSaved to: {output_csv_path}")
+            QMessageBox.information(self, "Success", f"Volume Calculation Completed.\nReference Elevation: {base_elevation:.2f} m\nTotal Volume: {total_volume:.4f} (10^8 m³)\nSaved to: {output_csv_path}")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Calculation failed: {str(e)}")
@@ -473,63 +490,36 @@ class PageVolume(QWidget):
             raise Exception(f"Failed to save CSV: {str(e)}")
 
     def calculate_shore_elevation(self, lake_shapefile, raster_path):
-        """
-        通过取湖泊面边界上的栅格高程平均值来估算水位
-        """
-        temp_dir = os.path.join(os.path.dirname(raster_path), "lake_temp_vol")
+        """Mean Lake DEM elevation on the largest polygon's exterior shoreline."""
+        rings = get_largest_polygon_rings(lake_shapefile)
+        if not rings:
+            raise ValueError("Lake shapefile contains no valid polygon with positive area.")
+        raster_ds = gdal.Open(raster_path)
+        if raster_ds is None:
+            raise ValueError(f"Cannot open Raster: {raster_path}")
         try:
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            driver = ogr.GetDriverByName("ESRI Shapefile")
-            shapefile_ds = driver.Open(lake_shapefile, 0)
-            if shapefile_ds is None:
-                raise Exception(f"Cannot open SHP: {lake_shapefile}")
-            
-            layer = shapefile_ds.GetLayer()
-            raster_ds = gdal.Open(raster_path)
-            if raster_ds is None:
-                raise Exception(f"Cannot open Raster: {raster_path}")
-                
-            geo_transform = raster_ds.GetGeoTransform()
+            inverse_gt = gdal.InvGeoTransform(raster_ds.GetGeoTransform())
+            if inverse_gt is None:
+                raise ValueError("Lake DEM has an invalid geotransform.")
             band = raster_ds.GetRasterBand(1)
             nodata = band.GetNoDataValue()
-            
             elevations = []
-            polygon_count = 0
-            for feature in layer:
-                geom = feature.GetGeometryRef()
-                for boundary in cf.iter_polygon_exterior_rings(geom):
-                    polygon_count += 1
-                    for i in range(boundary.GetPointCount()):
-                        x_coord, y_coord = boundary.GetX(i), boundary.GetY(i)
-                        px = int((x_coord - geo_transform[0]) / geo_transform[1])
-                        py = int((y_coord - geo_transform[3]) / geo_transform[5])
-                        if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
-                            continue
-
-                        values = band.ReadAsArray(px, py, 1, 1)
-                        if values is None:
-                            continue
-                        elevation = float(values[0, 0])
-                        if np.isfinite(elevation) and (
-                            nodata is None or elevation != nodata
-                        ):
-                            elevations.append(elevation)
-                            
-            if polygon_count == 0:
-                raise Exception(
-                    "Lake shapefile contains no valid Polygon, MultiPolygon, "
-                    "PolygonZ, or MultiPolygonZ geometry."
-                )
+            for x_coord, y_coord in rings[0]:
+                px_float, py_float = gdal.ApplyGeoTransform(inverse_gt, float(x_coord), float(y_coord))
+                px, py = int(np.floor(px_float)), int(np.floor(py_float))
+                if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
+                    continue
+                values = band.ReadAsArray(px, py, 1, 1)
+                if values is None:
+                    continue
+                elevation = float(values[0, 0])
+                if np.isfinite(elevation) and (nodata is None or elevation != nodata):
+                    elevations.append(elevation)
             if elevations:
-                return np.mean(elevations)
-            raise Exception("No valid elevation data found on shoreline.")
-        
-        except Exception as e:
-            raise RuntimeError(f"Shore elevation calc failed: {str(e)}")
+                return float(np.mean(elevations))
+            raise ValueError("No valid Lake DEM elevation data found on the largest polygon's shoreline.")
         finally:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            raster_ds = None
 
     def plot_capacity_curve(self, x_data, y_data, output_path=None):
         """Save a standalone E-V curve image without opening another window."""

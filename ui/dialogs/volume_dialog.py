@@ -153,7 +153,7 @@ class VolumeDialog(QDialog):
 
     def setup_dynamic_content(self):
         if self.mode == "calc_volume":
-            self.widgets['ref_elev'] = self.create_input_row("Reference Elevation (m):", "1000", style="Gold", is_value=True)
+            self.widgets['ref_elev'] = self.create_input_row("Reference Elevation (m):", "Optional: auto from shoreline", style="Gold")
             self.widgets['lake_dem'] = self.create_input_row("Lake DEM:", "Select .tif...", browse=True)
             self.widgets['lake_shp'] = self.create_input_row("Lake Polygon SHP:", "Select .shp...", browse=True)
             self.widgets['out_csv'] = self.create_input_row("Output CSV:", "Save as .csv...", browse=True, save_mode=True)
