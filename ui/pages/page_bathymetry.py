@@ -638,12 +638,18 @@ class PageBathymetry(QWidget):
         ds = gdal.Open(depth_raster, gdal.GA_ReadOnly)
         if not ds: raise Exception("Cannot open depth raster.")
         
-        band = ds.GetRasterBand(1)
+        driver = gdal.GetDriverByName('GTiff')
+        out_ds = driver.CreateCopy(out_raster, ds, 0)
+        if not out_ds:
+            ds = None
+            raise Exception("Cannot create output elevation raster.")
+        band = out_ds.GetRasterBand(1)
         nodata = band.GetNoDataValue()
         
         # 逐块处理或整体处理（此处假设内存够，整体处理）
         arr = band.ReadAsArray()
         if arr is None:
+            out_ds = None
             ds = None
             raise Exception("Cannot read depth raster values.")
 
@@ -656,12 +662,6 @@ class PageBathymetry(QWidget):
             valid_mask &= raster_mask > 0
         if nodata is not None and np.isfinite(nodata):
             valid_mask &= arr != nodata
-        if not valid_mask.any():
-            ds = None
-            raise ValueError(
-                "Depth raster contains no valid depth cells. "
-                "Regenerate Terrain Generation before elevation adjustment."
-            )
         
         # 处理有效值
         arr[valid_mask] = base_elev - arr[valid_mask]
@@ -669,14 +669,7 @@ class PageBathymetry(QWidget):
         # Remove the narrow constant-height high-value artifact sometimes
         # produced along the valid lake footprint before the DEM is saved.
         arr, shoreline_result = _correct_shoreline_spikes(arr, valid_mask)
-        driver = gdal.GetDriverByName('GTiff')
-        out_ds = driver.CreateCopy(out_raster, ds, 0)
-        if not out_ds:
-            ds = None
-            raise Exception("Cannot create output elevation raster.")
-        band = out_ds.GetRasterBand(1)
         band.WriteArray(arr)
-        band.ComputeStatistics(False)
         band.FlushCache()
         out_ds.FlushCache()
         out_ds = None  # Save
