@@ -206,7 +206,7 @@ class BathymetryDialog(QDialog):
         # 3. 水下地形生成
         elif self.mode == "terrain":
             self.widgets['depth_shp'] = self.create_input_row("Depth Points SHP:", "Select .shp...", browse=True)
-            self.widgets['z_field'] = self.create_input_row("Z Field Name:", "Depth", is_value=True)
+            self.widgets['z_field'] = self.create_input_row("Z Field Name:", "Auto: Depth / 水深")
             self.widgets['breakline'] = self.create_input_row("Shoreline SHP:", "Select .shp...", browse=True)
             self.widgets['polygon'] = self.create_input_row("Lake Polygon:", "Select .shp...", browse=True)
             self.widgets['out_dem'] = self.create_input_row(

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-set "APP_VERSION=1.0.2"
+set "APP_VERSION=1.0.3"
 set "RELEASE_ARCHIVE=%cd%\dist\LakeTopo-v%APP_VERSION%-windows-x64.zip"
 
 python -c "import PyInstaller, numpy, lightgbm, scipy; from osgeo import gdal, gdal_array; from PyQt5 import QtWebEngineWidgets; from scipy.interpolate import griddata; from scipy.ndimage import gaussian_filter; from scipy.spatial import cKDTree; from sklearn.ensemble import RandomForestRegressor"

@@ -12,6 +12,31 @@ except ImportError:
     ogr = None
     osr = None
 
+def resolve_depth_field(layer, requested_field=None):
+    """Resolve Depth/水深 aliases, while honoring explicitly named custom fields.
+
+    Keep the actual field spelling for OGR/GDAL. Numeric text fields are allowed
+    because existing predicted-point SHPs store Depth as text.
+    """
+    if layer is None:
+        raise ValueError("The depth shapefile contains no readable layer.")
+    fields = {field.GetName().casefold(): field.GetName() for field in layer.schema}
+    requested = str(requested_field or "").strip()
+    if requested and requested.casefold() not in ("depth", "水深"):
+        candidates = [requested]
+    else:
+        candidates = ([requested] if requested else []) + ["Depth", "水深"]
+    for candidate in candidates:
+        if candidate.casefold() in fields:
+            return fields[candidate.casefold()]
+    available = ", ".join(fields.values()) or "(none)"
+    expected = repr(requested) if requested else "'Depth' or '水深'"
+    raise ValueError(
+        f"Depth field {expected} not found. Supported aliases: 'Depth', '水深'. "
+        f"Available fields: {available}"
+    )
+
+
 def get_dataset_srs(path):
     if not path or not os.path.exists(path):
         return None, f"File not found: {path}"

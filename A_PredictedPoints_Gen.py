@@ -548,7 +548,14 @@ def determine_predictedpoints_info(
 # 6) Survey 点 topo 信息（关键改动：对齐与兜底）
 # =========================
 def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt):
-    """将 Survey.shp 栅格化到模板栅格（湖区）的同一网格/投影上"""
+    """Rasterize Depth/水深 onto the lake grid and reject unusable survey data."""
+    ds = ogr.Open(survey_shp)
+    if ds is None:
+        raise ValueError(f"Cannot open survey shapefile: {survey_shp}")
+    lyr = ds.GetLayer()
+    if lyr is None:
+        raise ValueError(f"Survey shapefile contains no readable layer: {survey_shp}")
+    depth_field = cf.resolve_depth_field(lyr)
     x_res = template_raster.NCol()
     y_res = template_raster.NRow()
     gt = (
@@ -563,18 +570,35 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
     srs.ImportFromWkt(proj_wkt)
 
     dst = gdal.GetDriverByName('GTiff').Create(out_tif, x_res, y_res, 1, gdal.GDT_Float32)
-    dst.SetGeoTransform(gt)
-    dst.SetProjection(srs.ExportToWkt())
-    band = dst.GetRasterBand(1)
-    band.SetNoDataValue(-9999)
-    band.Fill(-9999)
-
-    ds = ogr.Open(survey_shp)
-    lyr = ds.GetLayer()
-    # 若只需“有无点”，可改为 options=["BURN_VALUES=1","ALL_TOUCHED=TRUE"]
-    gdal.RasterizeLayer(dst, [1], lyr, options=["ATTRIBUTE=Depth", "ALL_TOUCHED=TRUE"])
-    dst = None
-    ds = None
+    if dst is None:
+        raise ValueError(f"Cannot create survey raster: {out_tif}")
+    try:
+        dst.SetGeoTransform(gt)
+        dst.SetProjection(srs.ExportToWkt())
+        band = dst.GetRasterBand(1)
+        band.SetNoDataValue(-9999)
+        band.Fill(-9999)
+        status = gdal.RasterizeLayer(
+            dst, [1], lyr,
+            options=[f"ATTRIBUTE={depth_field}", "ALL_TOUCHED=TRUE"],
+        )
+        if status != gdal.CE_None:
+            raise ValueError(
+                f"Survey rasterization failed for field '{depth_field}': "
+                f"{gdal.GetLastErrorMsg()}"
+            )
+        data = band.ReadAsArray()
+        if not numpy.any(numpy.isfinite(data) & (data > 0)):
+            raise ValueError(
+                f"Survey field '{depth_field}' produced no valid positive depth "
+                "cells on the lake grid. Check depth values, spatial overlap, "
+                "and coordinate reference systems."
+            )
+    finally:
+        band = None
+        dst = None
+        lyr = None
+        ds = None
 
 def determine_surveypoints_info(
     _workSP,
@@ -696,6 +720,15 @@ def determine_surveypoints_info(
                 percent,
                 f"Extracting survey-point terrain data ({processed}/{total} points)…",
             )
+
+    if used < 6:
+        raise ValueError(
+            f"Only {used} usable training samples were extracted; at least 6 "
+            f"are required. Positive survey cells: {total}; "
+            f"too close to shoreline: {tooClose}; "
+            f"terrain extraction failed: {failedTopo}. "
+            "Check survey coverage and the surrounding DEM."
+        )
 
     _report_progress(progress_callback, 68, "Writing model training data…")
     _remove_file_if_exists(_txtFile)

@@ -137,9 +137,10 @@ def buildLakeDEM(
 
     print("▶ 读取湖区polygon ...")
     _report_progress(progress_callback, 37, "Reading the lake polygon…")
-    polygon_coords = get_polygon_coords(lake_polygon_file)
-    if polygon_coords is None:
+    lake_rings = get_largest_polygon_rings(lake_polygon_file)
+    if not lake_rings:
         raise RuntimeError("未能读取到湖区面数据，请检查 polygon shp 文件！")
+    polygon_coords = np.vstack(lake_rings)
 
     print("▶ griddata插值 DEM ...")
     _report_progress(progress_callback, 42, "Preparing cubic DEM interpolation…")
@@ -152,12 +153,24 @@ def buildLakeDEM(
 
     print("▶ 构建湖区polygon mask ...")
     _report_progress(progress_callback, 66, "Building the lake polygon mask…")
-    lake_mask = build_lake_mask_from_polygon(xi, yi, polygon_coords)
+    lake_mask = build_lake_mask_from_polygon(xi, yi, [lake_rings])
+    if not lake_mask.any():
+        raise ValueError(
+            "The largest lake polygon covers no terrain grid cells. "
+            "Check polygon coverage, coordinate reference systems and resolution."
+        )
     _report_progress(progress_callback, 72, "Lake polygon mask completed.")
     
     # 二次平滑处理，提高表面细腻度
     _report_progress(progress_callback, 75, "Smoothing the interpolated surface…")
-    zi_smooth = gaussian_filter(zi, sigma=smooth_sigma)
+    # Smooth only valid interpolation samples; NaNs outside the convex hull
+    # must not spread into valid lake cells through the Gaussian kernel.
+    valid_interpolation = np.isfinite(zi)
+    smooth_values = gaussian_filter(np.where(valid_interpolation, zi, 0.0), sigma=smooth_sigma)
+    smooth_weights = gaussian_filter(valid_interpolation.astype(float), sigma=smooth_sigma)
+    zi_smooth = np.full_like(zi, np.nan)
+    np.divide(smooth_values, smooth_weights, out=zi_smooth, where=smooth_weights > 0)
+    zi_smooth[~valid_interpolation] = np.nan
     
     # 只保留湖区内插值，湖外全部NoData
     _report_progress(progress_callback, 79, "Applying the lake mask and NoData values…")
@@ -190,14 +203,29 @@ def buildLakeDEM(
 # --- 以下是内部调用函数，保持和你的风格一致 ---
 def read_points_with_z(shapefile_path, z_field=None):
     ds = ogr.Open(shapefile_path)
+    if ds is None:
+        raise ValueError(f"Cannot open depth shapefile: {shapefile_path}")
     layer = ds.GetLayer()
+    if layer is None:
+        raise ValueError(f"Depth shapefile contains no readable layer: {shapefile_path}")
+    depth_field = None
     points = []
     for feature in layer:
         geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
         if geom.GetGeometryType() in [ogr.wkbPoint, ogr.wkbPoint25D]:
             x, y = geom.GetX(), geom.GetY()
-            z = float(geom.GetZ()) if geom.GetGeometryType() == ogr.wkbPoint25D else float(feature.GetField(z_field))
-            points.append([x, y, z])
+            if geom.GetGeometryType() == ogr.wkbPoint25D:
+                value = geom.GetZ()
+            else:
+                if depth_field is None:
+                    depth_field = cf.resolve_depth_field(layer, z_field)
+                value = feature.GetField(depth_field)
+            if value is not None:
+                z = float(value)
+                if np.isfinite([x, y, z]).all():
+                    points.append([x, y, z])
     return np.array(points, dtype=np.float64)
 
 def get_spatial_reference_from_shapefile(shapefile_path):
@@ -291,23 +319,43 @@ def densify_breakline_points(
                         break
     return np.array(points, dtype=np.float64)
 
-def get_polygon_coords(shapefile_path):
+def get_largest_polygon_rings(shapefile_path):
+    """Select the largest polygon part across all features, retaining its holes."""
     ds = ogr.Open(shapefile_path)
     if ds is None:
-        return None
+        return []
     layer = ds.GetLayer()
     if layer is None:
-        ds = None
-        return None
+        return []
+    largest_rings = []
+    largest_area = 0.0
     for feat in layer:
-        geom = feat.GetGeometryRef()
-        for ring in cf.iter_polygon_exterior_rings(geom):
-            coords = [(ring.GetX(i), ring.GetY(i)) for i in range(ring.GetPointCount())]
-            if len(coords) >= 4:
-                ds = None
-                return np.asarray(coords, dtype=np.float64)
-    ds = None
-    return None
+        for polygon in cf.iter_polygon_parts(feat.GetGeometryRef()):
+            area = polygon.GetArea()
+            if not np.isfinite(area) or area <= largest_area:
+                continue
+            rings = []
+            for ring_index in range(polygon.GetGeometryCount()):
+                ring = polygon.GetGeometryRef(ring_index)
+                coords = np.asarray(
+                    [(ring.GetX(i), ring.GetY(i)) for i in range(ring.GetPointCount())],
+                    dtype=np.float64,
+                )
+                if len(coords) >= 4 and np.isfinite(coords).all():
+                    rings.append(coords)
+                elif ring_index == 0:
+                    break
+            else:
+                if rings:
+                    largest_rings = rings
+                    largest_area = area
+    return largest_rings
+
+
+def get_polygon_coords(shapefile_path):
+    """Legacy single-ring accessor: use the largest exterior, not the first fragment."""
+    rings = get_largest_polygon_rings(shapefile_path)
+    return rings[0] if rings else None
 
 def griddata_dem(points, resolution=2.0, method='cubic', progress_callback=None):
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
@@ -339,13 +387,21 @@ def griddata_dem(points, resolution=2.0, method='cubic', progress_callback=None)
     return xi, yi, zi
 
 def build_lake_mask_from_polygon(xi, yi, polygon_coords):
-    path = Path(polygon_coords)
+    """Union polygon parts, subtracting each part's holes; also accept one legacy ring."""
+    polygons = [[polygon_coords]] if isinstance(polygon_coords, np.ndarray) else polygon_coords
     grid_points = np.vstack((xi.flatten(), yi.flatten())).T
-    inside = path.contains_points(grid_points)
+    inside = np.zeros(len(grid_points), dtype=bool)
+    for rings in polygons:
+        part_inside = Path(rings[0]).contains_points(grid_points)
+        for hole in rings[1:]:
+            part_inside &= ~Path(hole).contains_points(grid_points)
+        inside |= part_inside
     mask = inside.reshape(xi.shape)
     return mask
 
 def save_dem_to_geotiff(xi, yi, zi, output_path, srs):
+    if not np.isfinite(zi).any():
+        raise ValueError("Terrain generation produced no valid depth cells; no DEM was saved.")
     zi = np.flipud(zi)
     nrows, ncols = zi.shape
     xres = (xi.max() - xi.min()) / (ncols - 1)

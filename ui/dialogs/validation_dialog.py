@@ -190,7 +190,7 @@ class ValidationDialog(QDialog):
             self.widgets['input_raster'] = self.create_input_row("Predicted DEM:", "Select .tif...", browse=True)
             self.widgets['surface_dem'] = self.create_input_row("Surface DEM:", "Select .tif...", browse=True)
             # 3) 实测水深字段名
-            self.widgets['depth_field'] = self.create_input_row("Depth Field:", "Depth", is_value=True)
+            self.widgets['depth_field'] = self.create_input_row("Depth Field:", "Auto: Depth / 水深")
             
             # 4) 输出 TXT (保存文件模式)
             self.widgets['output_txt'] = self.create_input_row("Output TXT:", "Save as .txt...", browse=True, save_mode=True)

@@ -1,5 +1,4 @@
 import os
-import shutil
 import numpy as np
 from osgeo import gdal, ogr
 from scipy.ndimage import distance_transform_edt
@@ -579,9 +578,6 @@ class PageBathymetry(QWidget):
                 if not path or not os.path.isfile(path):
                     QMessageBox.warning(self, "Error", f"{label} file not found.")
                     return
-            if not p2:
-                QMessageBox.warning(self, "Error", "Z field name is required.")
-                return
             if not p5:
                 QMessageBox.warning(self, "Error", "Output DEM path is required.")
                 return
@@ -635,23 +631,19 @@ class PageBathymetry(QWidget):
         else:
             QMessageBox.warning(self, "Error", "Provide Base Elevation OR Lake Polygon + Surrounding DEM.")
             return
+        if not np.isfinite(base_elev):
+            raise ValueError("Base elevation must be a finite number.")
 
         # 执行栅格运算: Elevation = Base - Depth
         ds = gdal.Open(depth_raster, gdal.GA_ReadOnly)
         if not ds: raise Exception("Cannot open depth raster.")
         
-        driver = gdal.GetDriverByName('GTiff')
-        out_ds = driver.CreateCopy(out_raster, ds, 0)
-        if not out_ds:
-            ds = None
-            raise Exception("Cannot create output elevation raster.")
-        band = out_ds.GetRasterBand(1)
+        band = ds.GetRasterBand(1)
         nodata = band.GetNoDataValue()
         
         # 逐块处理或整体处理（此处假设内存够，整体处理）
         arr = band.ReadAsArray()
         if arr is None:
-            out_ds = None
             ds = None
             raise Exception("Cannot read depth raster values.")
 
@@ -664,6 +656,12 @@ class PageBathymetry(QWidget):
             valid_mask &= raster_mask > 0
         if nodata is not None and np.isfinite(nodata):
             valid_mask &= arr != nodata
+        if not valid_mask.any():
+            ds = None
+            raise ValueError(
+                "Depth raster contains no valid depth cells. "
+                "Regenerate Terrain Generation before elevation adjustment."
+            )
         
         # 处理有效值
         arr[valid_mask] = base_elev - arr[valid_mask]
@@ -671,7 +669,14 @@ class PageBathymetry(QWidget):
         # Remove the narrow constant-height high-value artifact sometimes
         # produced along the valid lake footprint before the DEM is saved.
         arr, shoreline_result = _correct_shoreline_spikes(arr, valid_mask)
+        driver = gdal.GetDriverByName('GTiff')
+        out_ds = driver.CreateCopy(out_raster, ds, 0)
+        if not out_ds:
+            ds = None
+            raise Exception("Cannot create output elevation raster.")
+        band = out_ds.GetRasterBand(1)
         band.WriteArray(arr)
+        band.ComputeStatistics(False)
         band.FlushCache()
         out_ds.FlushCache()
         out_ds = None  # Save
@@ -733,48 +738,34 @@ class PageBathymetry(QWidget):
     # ------------------ 辅助函数 ------------------
 
     def calculate_shore_elevation(self, lake_shapefile, raster_path):
-        """计算湖岸线平均高程"""
-        temp_dir = os.path.join(os.path.dirname(raster_path), "lake_temp_elev")
+        """Sample the exterior shoreline of the same largest polygon used for terrain."""
+        rings = DEMFunc.get_largest_polygon_rings(lake_shapefile)
+        if not rings:
+            raise ValueError("Lake shapefile contains no valid polygon with positive area.")
+        ds_ras = gdal.Open(raster_path)
+        if ds_ras is None:
+            raise ValueError(f"Cannot open surrounding DEM: {raster_path}")
         try:
-            os.makedirs(temp_dir, exist_ok=True)
-            ds_shp = ogr.Open(lake_shapefile)
-            ds_ras = gdal.Open(raster_path)
-            if not ds_shp or not ds_ras: raise Exception("Invalid input files")
-
             gt = ds_ras.GetGeoTransform()
+            inverse_gt = gdal.InvGeoTransform(gt)
+            if inverse_gt is None:
+                raise ValueError("Surrounding DEM has an invalid geotransform.")
             band = ds_ras.GetRasterBand(1)
-            layer = ds_shp.GetLayer()
-            
-            elevs = []
-            polygon_count = 0
             nodata = band.GetNoDataValue()
-            for feat in layer:
-                geom = feat.GetGeometryRef()
-                for ring in cf.iter_polygon_exterior_rings(geom):
-                    polygon_count += 1
-                    for i in range(ring.GetPointCount()):
-                        mx, my = ring.GetX(i), ring.GetY(i)
-                        px = int((mx - gt[0]) / gt[1])
-                        py = int((my - gt[3]) / gt[5])
-                        if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
-                            continue
-                        values = band.ReadAsArray(px, py, 1, 1)
-                        if values is None:
-                            continue
-                        value = float(values[0, 0])
-                        if np.isfinite(value) and (nodata is None or value != nodata):
-                            elevs.append(value)
-            
-            if polygon_count == 0:
-                raise Exception(
-                    "Lake shapefile contains no valid Polygon, MultiPolygon, "
-                    "PolygonZ, or MultiPolygonZ geometry."
-                )
-            if elevs:
-                return np.mean(elevs)
-            raise Exception("No valid elevation found on shoreline.")
-
-        except Exception as e:
-            raise e
+            elevs = []
+            for mx, my in rings[0]:
+                px_float, py_float = gdal.ApplyGeoTransform(inverse_gt, float(mx), float(my))
+                px, py = int(np.floor(px_float)), int(np.floor(py_float))
+                if px < 0 or py < 0 or px >= band.XSize or py >= band.YSize:
+                    continue
+                values = band.ReadAsArray(px, py, 1, 1)
+                if values is None:
+                    continue
+                value = float(values[0, 0])
+                if np.isfinite(value) and (nodata is None or value != nodata):
+                    elevs.append(value)
+            if not elevs:
+                raise ValueError("No valid elevation found on the largest polygon's shoreline.")
+            return float(np.mean(elevs))
         finally:
-            if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
+            ds_ras = None

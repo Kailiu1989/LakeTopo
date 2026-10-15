@@ -216,10 +216,6 @@ class PageValidation(QWidget):
         if not output_txt:
             QMessageBox.warning(self, "Error", "Output TXT path is required.")
             return
-        if not depth_field:
-            QMessageBox.warning(self, "Error", "Depth field is required.")
-            return
-
         try:
             pred_ds = gdal.Open(input_raster)
             surface_ds = gdal.Open(surface_dem)
@@ -239,9 +235,7 @@ class PageValidation(QWidget):
             if not shp_ds:
                 raise Exception("Cannot open shapefile.")
             shp_layer = shp_ds.GetLayer()
-            layer_defn = shp_layer.GetLayerDefn()
-            if layer_defn.GetFieldIndex(depth_field) < 0:
-                raise Exception(f"Depth field not found: {depth_field}")
+            depth_field = cf.resolve_depth_field(shp_layer, depth_field)
 
             diffs = []
             for feature in shp_layer:
