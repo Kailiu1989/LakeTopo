@@ -41,4 +41,5 @@ python -m pip install pyinstaller
 
 - 项目依赖 `PyQtWebEngine`、`GDAL/osgeo` 和 Cesium 静态资源，建议使用文件夹发布，启动更稳定，也便于排查缺失 DLL 或数据文件。
 - `User_guide.pdf` 已按打包资源处理，随发布目录一起分发。
+- `ui/locales/qt_zh_CN.qm` 随 `LakeTopo.spec` 打包，用于文件选择器、标准弹窗及右键菜单的中文显示；请保留整个 `ui/locales` 目录。
 - 如果目标电脑安全软件拦截本地端口，请允许 `LakeTopo.exe` 使用 `localhost:9001`，Cesium 视图需要通过本地 HTTP 服务加载。

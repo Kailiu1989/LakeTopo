@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFrame, QFileDialog,
                              QGraphicsDropShadowEffect, QWidget, QSizePolicy)
@@ -94,7 +95,7 @@ class ValidationDialog(QDialog):
 
         # 5. Run 按钮固定位置
         btn_layout = QHBoxLayout()
-        self.btn_run = QPushButton("  Run") 
+        self.btn_run = localized(QPushButton("  Run"))
         self.btn_run.setFixedSize(251, 60)
         self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet("""
@@ -147,7 +148,7 @@ class ValidationDialog(QDialog):
         }
         title_text = title_map.get(self.mode, "Validation Tool")
         
-        title_lbl = QLabel(title_text)
+        title_lbl = localized(QLabel(title_text))
         title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #fff; background: transparent; margin-left: 5px;")
 
         btn_close = QPushButton()
@@ -205,7 +206,7 @@ class ValidationDialog(QDialog):
         row_layout.setSpacing(10)
 
         # 标签：宽度自适应
-        lbl = QLabel(label_text)
+        lbl = localized(QLabel(label_text))
         lbl.setWordWrap(True) 
         lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lbl.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF; background: transparent;")
@@ -219,7 +220,7 @@ class ValidationDialog(QDialog):
         if is_value:
             le.setText(placeholder)
         else:
-            le.setPlaceholderText(placeholder)
+            le.setPlaceholderText(tr(placeholder))
 
         # 边框颜色
         border_color = "#FBDC58" if style == "Gold" else "#27C77B"
@@ -272,23 +273,23 @@ class ValidationDialog(QDialog):
 
     def browse_action(self, line_edit, save_mode, folder_mode):
         if folder_mode:
-            dialog = QFileDialog(self, "Select Directory")
+            dialog = QFileDialog(self, tr("Select Directory"))
             dialog.setFileMode(QFileDialog.Directory)
             dialog.setOption(QFileDialog.ShowDirsOnly, True)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
         elif save_mode:
-            dialog = QFileDialog(self, "Save File")
+            dialog = QFileDialog(self, tr("Save File"))
             dialog.setAcceptMode(QFileDialog.AcceptSave)
-            dialog.setNameFilter("Text Files (*.txt);;All Files (*)")
+            dialog.setNameFilter(tr("Text Files (*.txt);;All Files (*)"))
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
             if path and not path.lower().endswith(".txt"):
                 path += ".txt"
         else:
-            dialog = QFileDialog(self, "Select File")
+            dialog = QFileDialog(self, tr("Select File"))
             dialog.setFileMode(QFileDialog.ExistingFile)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)

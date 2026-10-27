@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 import os
 import csv
 import numpy as np
@@ -199,7 +200,7 @@ class PageVolume(QWidget):
         main_layout.addWidget(sidebar)
 
     def add_sidebar_btn(self, layout, text, mode_key):
-        btn = QPushButton(text)
+        btn = localized(QPushButton(text))
         btn.setObjectName("sideBtnCyan")
         btn.setFixedSize(270, 60)
         btn.setCursor(Qt.PointingHandCursor)
@@ -263,7 +264,7 @@ class PageVolume(QWidget):
         lake_shapefile_path = data.get('lake_shp', '').strip()
 
         if not os.path.exists(dem_raster_path):
-            QMessageBox.warning(self, "Error", "Lake DEM file not found.")
+            QMessageBox.warning(self, tr("Error"), tr("Lake DEM file not found."))
             return
 
         try:
@@ -271,11 +272,11 @@ class PageVolume(QWidget):
             # numeric reference when no SHP was provided; never fall back silently.
             if lake_shapefile_path:
                 if not os.path.isfile(lake_shapefile_path):
-                    QMessageBox.warning(self, "Error", "Lake Polygon SHP file not found.")
+                    QMessageBox.warning(self, tr("Error"), tr("Lake Polygon SHP file not found."))
                     return
                 ok, message = cf.check_spatial_references_match([dem_raster_path, lake_shapefile_path])
                 if not ok:
-                    QMessageBox.warning(self, "Projection Mismatch", message)
+                    QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
                     return
                 print("Calculating shore elevation from Shapefile...")
                 base_elevation = self.calculate_shore_elevation(lake_shapefile_path, dem_raster_path)
@@ -288,13 +289,13 @@ class PageVolume(QWidget):
                     if not np.isfinite(base_elevation):
                         raise ValueError
                 except ValueError:
-                    QMessageBox.warning(self, "Error", "Reference elevation must be a finite number.")
+                    QMessageBox.warning(self, tr("Error"), tr("Reference elevation must be a finite number."))
                     return
             else:
                 QMessageBox.warning(
-                    self, "Error",
-                    "Provide Lake Polygon SHP for automatic reference elevation, "
-                    "or enter Reference Elevation explicitly.",
+                    self, tr("Error"),
+                    tr("Provide Lake Polygon SHP for automatic reference elevation, "
+                    "or enter Reference Elevation explicitly."),
                 )
                 return
 
@@ -329,10 +330,10 @@ class PageVolume(QWidget):
             # 保存 CSV
             self.save_to_csv(output_csv_path, total_volume)
             
-            QMessageBox.information(self, "Success", f"Volume Calculation Completed.\nReference Elevation: {base_elevation:.2f} m\nTotal Volume: {total_volume:.4f} (10^8 m³)\nSaved to: {output_csv_path}")
+            QMessageBox.information(self, tr("Success"), tr(f"Volume Calculation Completed.\nReference Elevation: {base_elevation:.2f} m\nTotal Volume: {total_volume:.4f} (10^8 m³)\nSaved to: {output_csv_path}"))
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Calculation failed: {str(e)}")
+            QMessageBox.critical(self, tr("Error"), tr(f"Calculation failed: {str(e)}"))
 
     # =========================================================================
     # [辅助函数]
@@ -341,17 +342,17 @@ class PageVolume(QWidget):
         """Start asynchronous E-V calculation for the selected lake DEM."""
         dem_raster_path = data.get('lake_dem', '')
         if not os.path.exists(dem_raster_path):
-            QMessageBox.warning(self, "Error", "Lake DEM file not found.")
+            QMessageBox.warning(self, tr("Error"), tr("Lake DEM file not found."))
             return
         if self._curve_thread is not None and self._curve_thread.isRunning():
-            QMessageBox.information(self, "E-V Curve", "An E-V calculation is already running.")
+            QMessageBox.information(self, tr("E-V Curve"), tr("An E-V calculation is already running."))
             return
 
         self.curve_calculation_started.emit()
         self._curve_progress = QProgressDialog(
-            "Opening lake DEM…", "Cancel", 0, 100, self.window()
+            tr("Opening lake DEM…"), tr("Cancel"), 0, 100, self.window()
         )
-        self._curve_progress.setWindowTitle("E-V Curve Generation")
+        self._curve_progress.setWindowTitle(tr("E-V Curve Generation"))
         self._curve_progress.setWindowModality(Qt.WindowModal)
         self._curve_progress.setAutoClose(False)
         self._curve_progress.setAutoReset(False)
@@ -378,14 +379,14 @@ class PageVolume(QWidget):
 
     def _update_curve_progress(self, value, message):
         if self._curve_progress is not None:
-            self._curve_progress.setLabelText(message)
+            self._curve_progress.setLabelText(tr(message))
             self._curve_progress.setValue(value)
 
     def cancel_capacity_curve(self):
         if self._curve_thread is not None and self._curve_thread.isRunning():
             self._curve_thread.requestInterruption()
             if self._curve_progress is not None:
-                self._curve_progress.setLabelText("Cancelling E-V calculation…")
+                self._curve_progress.setLabelText(tr("Cancelling E-V calculation…"))
                 self._curve_progress.setCancelButton(None)
 
     def _close_curve_progress(self):
@@ -413,16 +414,16 @@ class PageVolume(QWidget):
         self.curve_ready.emit(result)
         QMessageBox.information(
             self,
-            "Success",
-            "E-V Curve Generation Completed.\n"
+            tr("Success"),
+            tr("E-V Curve Generation Completed.\n"
             "Use the bottom curve to select a water level and update the 3-D simulation."
-            + saved_message,
+            + saved_message),
         )
 
     def _on_curve_failed(self, message):
         self._close_curve_progress()
         self.curve_calculation_failed.emit(message)
-        QMessageBox.critical(self, "Error", f"Curve generation failed: {message}")
+        QMessageBox.critical(self, tr("Error"), tr(f"Curve generation failed: {message}"))
 
     def _on_curve_cancelled(self):
         self._close_curve_progress()
@@ -532,12 +533,12 @@ class PageVolume(QWidget):
         ax = figure.add_subplot(111)
         ax.set_facecolor("#f8f9fa")
         ax.grid(True, linestyle="--", alpha=0.45)
-        ax.plot(x, y, color="#008fa6", linewidth=2.5, label="Capacity Curve")
+        ax.plot(x, y, color="#008fa6", linewidth=2.5, label=tr("Capacity Curve"))
         ax.fill_between(x, y, color="#00bcd4", alpha=0.18)
         ax.scatter(x, y, color="#e74c3c", s=38, edgecolor="white", linewidth=1.0)
-        ax.set_title("Lake Elevation-Volume Curve", fontsize=16, fontweight="bold", pad=20)
-        ax.set_xlabel("Water level (m)", fontsize=12, fontweight="bold")
-        ax.set_ylabel("Volume (10⁸ m³)", fontsize=12, fontweight="bold")
+        ax.set_title(tr("Lake Elevation-Volume Curve"), fontsize=16, fontweight="bold", pad=20)
+        ax.set_xlabel(tr("Water level (m)"), fontsize=12, fontweight="bold")
+        ax.set_ylabel(tr("Volume (10⁸ m³)"), fontsize=12, fontweight="bold")
         ax.legend(loc="upper left")
         figure.tight_layout()
         if output_path:

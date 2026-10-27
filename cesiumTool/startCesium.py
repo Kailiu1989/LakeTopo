@@ -1,3 +1,4 @@
+from ui.i18n import tr
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import threading
 import traceback
@@ -134,7 +135,7 @@ class pyjsCon(QObject):
 
     @pyqtSlot(str)
     def jsMethod_GetPickData(self, value):
-        QMessageBox.information(None, "Data Info", "Selected data: {}".format(value))
+        QMessageBox.information(None, tr("Data Info"), tr("Selected data: {}".format(value)))
 
     @pyqtSlot(str)
     def jsMethod_ReadFile(self, value):
@@ -182,14 +183,14 @@ def initCesiumViewer(self):
 def get_min_max_exclude_zero_and_nodata(file_path, exclude_zero=True):
     dataset = gdal.Open(file_path, gdal.GA_ReadOnly)
     if not dataset:
-        raise ValueError("无法打开文件")
+        raise ValueError("Cannot open file")
 
     band = dataset.GetRasterBand(1)
     nodata = band.GetNoDataValue()
     data = band.ReadAsArray()
     if data is None:
         dataset = None
-        raise ValueError("无有效像素（全为 0/NoData）")
+        raise ValueError("No valid pixels (all zero or NoData)")
 
     data = np.asarray(data, dtype=float)
     mask = np.isfinite(data)
@@ -201,7 +202,7 @@ def get_min_max_exclude_zero_and_nodata(file_path, exclude_zero=True):
     valid_data = data[mask]
     if valid_data.size == 0:
         dataset = None
-        raise ValueError("无有效栅格像元")
+        raise ValueError("No valid raster cells")
 
     min_val = float(valid_data.min())
     max_val = float(valid_data.max())
@@ -220,7 +221,7 @@ def _bounded_raster_size(width, height, max_cells=MAX_CESIUM_RASTER_CELLS):
     width = int(width)
     height = int(height)
     if width <= 0 or height <= 0:
-        raise ValueError("栅格尺寸无效")
+        raise ValueError("Invalid raster dimensions")
     if width * height <= max_cells:
         return width, height
     scale = (float(max_cells) / float(width * height)) ** 0.5
@@ -238,13 +239,13 @@ def prepare_raster_for_cesium(file_path, max_cells=MAX_CESIUM_RASTER_CELLS):
     """Create a small, WGS84, NoData-aware raster payload for Cesium."""
     source_ds = gdal.Open(file_path, gdal.GA_ReadOnly)
     if source_ds is None:
-        raise ValueError("无法打开栅格文件")
+        raise ValueError("Cannot open raster file")
     if source_ds.RasterCount < 1:
         source_ds = None
-        raise ValueError("栅格文件没有可用波段")
+        raise ValueError("Raster has no usable band")
     if not source_ds.GetProjection():
         source_ds = None
-        raise ValueError("栅格缺少坐标系，无法定位到三维地图")
+        raise ValueError("Raster has no coordinate system and cannot be located on the 3D map")
 
     source_width = source_ds.RasterXSize
     source_height = source_ds.RasterYSize
@@ -272,13 +273,13 @@ def prepare_raster_for_cesium(file_path, max_cells=MAX_CESIUM_RASTER_CELLS):
     )
     source_ds = None
     if preview_ds is None:
-        raise ValueError("生成三维地图预览栅格失败")
+        raise ValueError("Failed to generate the 3D raster preview")
 
     preview_band = preview_ds.GetRasterBand(1)
     elevation_data = preview_band.ReadAsArray()
     if elevation_data is None:
         preview_ds = None
-        raise ValueError("栅格中没有可读取的数据")
+        raise ValueError("Raster contains no readable data")
     elevation_data = np.asarray(elevation_data, dtype=np.float32)
     finite_mask = np.isfinite(elevation_data)
     preview_nodata = preview_band.GetNoDataValue()
@@ -286,7 +287,7 @@ def prepare_raster_for_cesium(file_path, max_cells=MAX_CESIUM_RASTER_CELLS):
         finite_mask &= elevation_data != preview_nodata
     if not finite_mask.any():
         preview_ds = None
-        raise ValueError("栅格中没有有效像元")
+        raise ValueError("Raster contains no valid cells")
 
     # Zero has historically represented the background in this viewer.  Do
     # not allocate geometry for it; retain zero only for an all-zero raster.
@@ -351,8 +352,8 @@ import pandas as pd
 def openFile(self):
     options = QFileDialog.Options()
     options |= QFileDialog.DontUseNativeDialog
-    fileName, _ = QFileDialog.getOpenFileName(self, fileSelect, "",
-                                              fileType, options=options)
+    fileName, _ = QFileDialog.getOpenFileName(self, tr("Select SHP/TIFF/CSV Data"), "",
+                                              tr("Spatial Data (*.shp *.tif *.tiff *.csv);;All Files (*)"), options=options)
     if not fileName:
         return
 
@@ -372,8 +373,8 @@ def openFile(self):
             traceback.print_exc()
             QMessageBox.critical(
                 self,
-                "Raster Load Error",
-                f"Unable to add raster to the 3D map:\n{exc}",
+                tr("Raster Load Error"),
+                tr(f"Unable to add raster to the 3D map:\n{exc}"),
             )
 
 
@@ -381,7 +382,7 @@ def openFile(self):
         driver = ogr.GetDriverByName("ESRI Shapefile")
         in_ds = driver.Open(fileName, 0)
         if in_ds is None:
-            raise Exception(f"无法打开文件: {fileName}")
+            raise Exception(f"Cannot open file: {fileName}")
         in_layer = in_ds.GetLayer()
 
         source_srs = in_layer.GetSpatialRef()
@@ -488,9 +489,9 @@ def drawCube2(iData=None):
         height = int(iData.get("height", 0))
         height_data = iData.get("heightData", [])
         if width <= 0 or height <= 0 or width * height > MAX_CESIUM_RASTER_CELLS:
-            raise ValueError("三维栅格预览超过安全像元上限")
+            raise ValueError("3D raster preview exceeds the cell limit")
         if len(height_data) != width * height:
-            raise ValueError("三维栅格预览数据长度与网格尺寸不一致")
+            raise ValueError("3D raster preview data length does not match the grid dimensions")
     html_code = f"window.drawEntityCube2({_to_js_literal(iData)});"
     gWebView.page().runJavaScript(html_code)
 
@@ -527,92 +528,38 @@ def drawCsvJson(iData, fileName):
     gWebView.page().runJavaScript(html_code)
 
 
-# Viewer label settings（chinese）.
-fileSelect = "选择数据Shp或Tiff"
-fileType = "*;;Shapefile文件 (*.shp);;TIFF文件 (*.tif *.tiff);;CSV文件(*.csv)"
-
-dataTitle = "Data"
-dataSelect = "查看"
-dataDelete = "移除"
-dataProperty = "属性"
-pFileName = "文件名称"
-pDataType = "数据类型"
-pDataNum = "数据量"
-pDataExtent = "显示边界范围"
-pScale = "拉伸比例"
-pBaseHeight = "基础高度"
-pHeight = "拉伸高度"
-pMaxValue = "最大值"
-pMinValue = "最小值"
-pOk = "确认"
-pLengend = "图例"
+# Complete label sets consumed by the embedded Vue viewer.
+VIEWER_LABELS = {
+    "en": {
+        "dataTitle": "Data", "dataSelect": "View", "dataDelete": "Remove",
+        "dataProperty": "Properties", "pFileName": "File name", "pDataType": "Data type",
+        "pDataNum": "Count", "pDataExtent": "Show extent", "pScale": "Scale",
+        "pBaseHeight": "Base height", "pHeight": "Extrusion height",
+        "pMaxValue": "Maximum", "pMinValue": "Minimum", "pWidth": "Size",
+        "pColor": "Color", "pShowC": "Classes", "pOk": "OK", "pLengend": "Legend",
+    },
+    "zh": {
+        "dataTitle": "数据", "dataSelect": "查看", "dataDelete": "移除",
+        "dataProperty": "属性", "pFileName": "文件名称", "pDataType": "数据类型",
+        "pDataNum": "数据量", "pDataExtent": "显示边界范围", "pScale": "拉伸比例",
+        "pBaseHeight": "基础高度", "pHeight": "拉伸高度",
+        "pMaxValue": "最大值", "pMinValue": "最小值", "pWidth": "尺寸",
+        "pColor": "颜色", "pShowC": "类别", "pOk": "确认", "pLengend": "图例",
+    },
+}
 
 
 def changeViewerLanguage(isEn=True):
-    global fileSelect, fileType
-    if isEn is True:
-        fileSelect = "select Data Shp/Tiff"
-        fileType = "*;;Shapefile(*.shp);;TIFF(*.tif *.tiff);;CSV(*.csv)"
-        dataTitle = "Data"
-        dataSelect = "Select"
-        dataDelete = "Delete"
-        dataProperty = "Info"
-        pFileName = "File"
-        pDataType = "Type"
-        pDataNum = "Count"
-        pDataExtent = "Extent"
-        pScale = "Scale"
-        pBaseHeight = "Base Height"
-        pHeight = "Scale Height"
-        pMaxValue = "Max Value"
-        pMinValue = "Min Value"
-        pOk = "OK"
-        pLengend = "Legend"
-
-    else:
-        fileSelect = "select Data Shp/Tiff"
-        fileType = "*;;Shapefile(*.shp);;TIFF(*.tif *.tiff);;CSV(*.csv)"
-        dataTitle = "Data"
-        dataSelect = "Select"
-        dataDelete = "Delete"
-        dataProperty = "Info"
-        pFileName = "File"
-        pDataType = "Type"
-        pDataNum = "Count"
-        pDataExtent = "Extent"
-        pScale = "Scale"
-        pBaseHeight = "Base Height"
-        pHeight = "Scale Height"
-        pMaxValue = "Max Value"
-        pMinValue = "Min Value"
-        pOk = "OK"
-        pLengend = "Legend"
-        
-    labelText = {
-        "dataTitle": dataTitle,
-        "dataSelect": dataSelect,
-        "dataDelete": dataDelete,
-        "dataProperty": dataProperty,
-        "pFileName": pFileName,
-        "pDataType": pDataType,
-        "pDataNum": pDataNum,
-        "pDataExtent": pDataExtent,
-        "pScale": pScale,
-        "pBaseHeight": pBaseHeight,
-        "pHeight": pHeight,
-        "pMaxValue": pMaxValue,
-        "pMinValue": pMinValue,
-        "pOk": pOk,
-        "pLengend": pLengend
-    }
-
-    html_code = (
-        "(function(labelText){"
+    if not gWebView:
+        return
+    labels = VIEWER_LABELS["en" if isEn else "zh"]
+    script = (
+        "(function(labels){"
+        "window.labelText = labels;"
+        "document.documentElement.lang = " + _to_js_literal("en" if isEn else "zh-CN") + ";"
         "if (typeof window.changeViewerLanguage === 'function') {"
-        "window.changeViewerLanguage(labelText);"
-        "} else {"
-        "window.labelText = labelText;"
+        "window.changeViewerLanguage(labels);"
         "}"
-        f"}})({_to_js_literal(labelText)});"
+        "}) (" + _to_js_literal(labels) + ");"
     )
-    gWebView.page().runJavaScript(html_code)
+    gWebView.page().runJavaScript(script)

@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 import os
 import shutil
 import math
@@ -141,7 +142,7 @@ class PagePreprocess(QWidget):
         main_layout.addWidget(sidebar)
 
     def add_sidebar_btn(self, layout, text, mode_key):
-        btn = QPushButton(text)
+        btn = localized(QPushButton(text))
         btn.setObjectName("sideBtnCyan")
         btn.setFixedSize(270, 60)
         btn.setCursor(Qt.PointingHandCursor)
@@ -336,7 +337,7 @@ class PagePreprocess(QWidget):
                 seen.add(key)
 
         if not input_files:
-            QMessageBox.warning(self, "Error", "Please select at least one SHP or TIF file.")
+            QMessageBox.warning(self, tr("Error"), tr("Please select at least one SHP or TIF file."))
             return
 
         unsupported = [
@@ -346,8 +347,8 @@ class PagePreprocess(QWidget):
         if unsupported:
             QMessageBox.warning(
                 self,
-                "Unsupported Files",
-                "Only .shp, .tif, and .tiff files are supported:\n" + "\n".join(unsupported),
+                tr("Unsupported Files"),
+                tr("Only .shp, .tif, and .tiff files are supported:\n" + "\n".join(unsupported)),
             )
             return
 
@@ -357,16 +358,16 @@ class PagePreprocess(QWidget):
         if self._projection_thread is not None and self._projection_thread.isRunning():
             QMessageBox.information(
                 self,
-                "Processing",
-                "A batch projection task is already running.",
+                tr("Processing"),
+                tr("A batch projection task is already running."),
             )
             return
 
         self._projection_outcome = None
         self._projection_progress = QProgressDialog(
-            "Preparing projection conversion…", "Cancel", 0, 100, self.window()
+            tr("Preparing projection conversion…"), tr("Cancel"), 0, 100, self.window()
         )
-        self._projection_progress.setWindowTitle("Batch Projection to WGS84")
+        self._projection_progress.setWindowTitle(tr("Batch Projection to WGS84"))
         self._projection_progress.setWindowModality(Qt.WindowModal)
         self._projection_progress.setAutoClose(False)
         self._projection_progress.setAutoReset(False)
@@ -391,7 +392,7 @@ class PagePreprocess(QWidget):
 
     def _update_projection_progress(self, value, message):
         if self._projection_progress is not None:
-            self._projection_progress.setLabelText(str(message))
+            self._projection_progress.setLabelText(tr(str(message)))
             self._projection_progress.setValue(max(0, min(100, int(value))))
 
     def cancel_projection_task(self):
@@ -399,21 +400,21 @@ class PagePreprocess(QWidget):
             self._projection_thread.requestInterruption()
             if self._projection_progress is not None:
                 self._projection_progress.setLabelText(
-                    "Cancelling after the current GDAL operation…"
+                    tr("Cancelling after the current GDAL operation…")
                 )
                 self._projection_progress.setCancelButton(None)
 
     def _queue_projection_result(self, result):
         self._projection_outcome = ("result", result)
         if self._projection_progress is not None:
-            self._projection_progress.setLabelText("Finalizing projection results…")
+            self._projection_progress.setLabelText(tr("Finalizing projection results…"))
             if not result.get("cancelled"):
                 self._projection_progress.setValue(100)
 
     def _queue_projection_failure(self, message):
         self._projection_outcome = ("failure", str(message))
         if self._projection_progress is not None:
-            self._projection_progress.setLabelText("Finalizing projection failure…")
+            self._projection_progress.setLabelText(tr("Finalizing projection failure…"))
 
     def _close_projection_progress(self):
         if self._projection_progress is not None:
@@ -458,8 +459,8 @@ class PagePreprocess(QWidget):
         if status == "failure":
             QMessageBox.critical(
                 self,
-                "Projection Conversion Error",
-                f"Batch projection failed: {payload}",
+                tr("Projection Conversion Error"),
+                tr(f"Batch projection failed: {payload}"),
             )
             return
 
@@ -471,9 +472,9 @@ class PagePreprocess(QWidget):
         }
         message = self._projection_summary(result)
         if result.get("failed") or result.get("cancelled"):
-            QMessageBox.warning(self, "Projection Conversion Result", message)
+            QMessageBox.warning(self, tr("Projection Conversion Result"), tr(message))
         else:
-            QMessageBox.information(self, "Success", message)
+            QMessageBox.information(self, tr("Success"), tr(message))
 
     def shutdown(self):
         """Cancel and join a projection worker before the page is destroyed."""
@@ -491,13 +492,13 @@ class PagePreprocess(QWidget):
         """
         path = data.get('ws_path', '').strip()
         if not path:
-            QMessageBox.warning(self, "Error", "Please select a workspace path.")
+            QMessageBox.warning(self, tr("Error"), tr("Please select a workspace path."))
             return
 
         try:
             existed = os.path.isdir(path)
             if os.path.exists(path) and not existed:
-                QMessageBox.warning(self, "Error", "Workspace path must be a directory.")
+                QMessageBox.warning(self, tr("Error"), tr("Workspace path must be a directory."))
                 return
 
             os.makedirs(path, exist_ok=True)
@@ -518,9 +519,9 @@ class PagePreprocess(QWidget):
                 merit_candidate if os.path.isfile(merit_candidate) else None
             )
             action = "loaded" if existed else "created"
-            QMessageBox.information(self, "Success", f"Workspace {action} at:\n{self.workspace_dir}")
+            QMessageBox.information(self, tr("Success"), tr(f"Workspace {action} at:\n{self.workspace_dir}"))
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            QMessageBox.critical(self, tr("Error"), tr(str(e)))
 
     def get_workspace_context(self):
         """Return workspace outputs that can prefill downstream dialogs."""
@@ -772,7 +773,7 @@ class PagePreprocess(QWidget):
         Data Keys: 'lake_shp', 'dem_in', 'buffer_dist'
         """
         if not self.workspace_dir:
-            QMessageBox.warning(self, "Error", "Please open or create a workspace first.")
+            QMessageBox.warning(self, tr("Error"), tr("Please open or create a workspace first."))
             return
 
         lake_shp = data.get('lake_shp', '')
@@ -780,18 +781,18 @@ class PagePreprocess(QWidget):
         try:
             buffer_distance = float(data.get('buffer_dist', '1000').strip())
         except ValueError:
-            QMessageBox.warning(self, "Error", "Buffer distance must be a number.")
+            QMessageBox.warning(self, tr("Error"), tr("Buffer distance must be a number."))
             return
         if buffer_distance <= 0:
-            QMessageBox.warning(self, "Error", "Buffer distance must be greater than zero.")
+            QMessageBox.warning(self, tr("Error"), tr("Buffer distance must be greater than zero."))
             return
 
         if not os.path.isfile(lake_shp) or not os.path.isfile(dem_in):
-            QMessageBox.warning(self, "Error", "Input files are missing.")
+            QMessageBox.warning(self, tr("Error"), tr("Input files are missing."))
             return
         ok, message = cf.check_spatial_references_match([lake_shp, dem_in])
         if not ok:
-            QMessageBox.warning(self, "Projection Mismatch", message)
+            QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
             return
 
         base = os.path.basename(os.path.normpath(self.workspace_dir))
@@ -893,8 +894,8 @@ class PagePreprocess(QWidget):
 
             QMessageBox.information(
                 self,
-                "Success",
-                "Buffer full process completed.\n"
+                tr("Success"),
+                tr("Buffer full process completed.\n"
                 f"Buffer: {buffer_distance:g} m\n"
                 f"Shoreline features: {shoreline_count}\n"
                 "Shoreline CRS: WGS84 (EPSG:4326)\n\n"
@@ -903,8 +904,8 @@ class PagePreprocess(QWidget):
                 f"{dem_output}\n"
                 f"{slope_output}\n"
                 f"{extent_output}\n"
-                f"{shoreline_output}",
+                f"{shoreline_output}"),
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Error", str(exc))
+            QMessageBox.critical(self, tr("Error"), tr(str(exc)))
                 

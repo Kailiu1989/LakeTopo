@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 import os
 
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QFrame, QMessageBox)
@@ -30,7 +31,7 @@ class PageHelp(QWidget):
         btn_names = ["User guide"]
 
         for name in btn_names:
-            btn = QPushButton(name)
+            btn = localized(QPushButton(name))
             btn.setObjectName("sideBtnCyan")  # 默认青色
             btn.setFixedSize(270, 60)
             btn.setCursor(Qt.PointingHandCursor)
@@ -49,13 +50,14 @@ class PageHelp(QWidget):
         main_layout.addWidget(sidebar)
 
     def apply_elided_text(self, button, text, available_width):
+        text = tr(text)
         font = button.font()
         font.setPixelSize(14)
         font.setWeight(600)
         metrics = QFontMetrics(font)
         elided_text = metrics.elidedText(text, Qt.ElideRight, available_width)
         button.setText(elided_text)
-        if elided_text != text: button.setToolTip(text)
+        if elided_text != text: button.setToolTip(tr(text))
 
     def reset_buttons(self):
         """
@@ -114,17 +116,17 @@ class PageHelp(QWidget):
     def api_open_user_guide(self):
         guide_path = str(USER_GUIDE_PATH).strip()
         if not guide_path:
-            QMessageBox.warning(self, "User Guide", "Please set USER_GUIDE_PATH in page_help.py.")
+            QMessageBox.warning(self, tr("User Guide"), tr("Please set USER_GUIDE_PATH in page_help.py."))
             return
 
         guide_path = os.path.normpath(guide_path)
         if not os.path.exists(guide_path):
-            QMessageBox.warning(self, "User Guide", f"User guide file not found:\n{guide_path}")
+            QMessageBox.warning(self, tr("User Guide"), tr(f"User guide file not found:\n{guide_path}"))
             return
 
         opened = QDesktopServices.openUrl(QUrl.fromLocalFile(guide_path))
         if not opened:
-            QMessageBox.warning(self, "User Guide", f"Failed to open user guide:\n{guide_path}")
+            QMessageBox.warning(self, tr("User Guide"), tr(f"Failed to open user guide:\n{guide_path}"))
         return
 
         """

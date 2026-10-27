@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFrame, QFileDialog,
                              QGraphicsDropShadowEffect, QWidget, QSizePolicy)
@@ -84,7 +85,7 @@ class PreprocessDialog(QDialog):
 
         # 5. Run 按钮
         btn_layout = QHBoxLayout()
-        self.btn_run = QPushButton("  Run") 
+        self.btn_run = localized(QPushButton("  Run"))
         self.btn_run.setFixedSize(251, 60)
         self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet("""
@@ -137,7 +138,7 @@ class PreprocessDialog(QDialog):
         }
         title_text = title_map.get(self.mode, "Preprocess Tool")
         
-        title_lbl = QLabel(title_text)
+        title_lbl = localized(QLabel(title_text))
         title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #fff; background: transparent; margin-left: 5px;")
 
         btn_close = QPushButton()
@@ -189,7 +190,7 @@ class PreprocessDialog(QDialog):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(10)
 
-        lbl = QLabel(label_text)
+        lbl = localized(QLabel(label_text))
         lbl.setWordWrap(True) 
         lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lbl.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF; background: transparent;")
@@ -202,7 +203,7 @@ class PreprocessDialog(QDialog):
         if is_value:
             le.setText(placeholder)
         else:
-            le.setPlaceholderText(placeholder)
+            le.setPlaceholderText(tr(placeholder))
         if multi_files:
             le.setReadOnly(True)
             le.setProperty("selectedPaths", [])
@@ -253,18 +254,18 @@ class PreprocessDialog(QDialog):
 
     def browse_action(self, line_edit, is_folder, multi_files=False):
         if is_folder:
-            dialog = QFileDialog(self, "Select Directory")
+            dialog = QFileDialog(self, tr("Select Directory"))
             dialog.setFileMode(QFileDialog.Directory)
             dialog.setOption(QFileDialog.ShowDirsOnly, True)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
         elif multi_files:
-            dialog = QFileDialog(self, "Select SHP/TIF Files")
+            dialog = QFileDialog(self, tr("Select SHP/TIF Files"))
             dialog.setFileMode(QFileDialog.ExistingFiles)
             dialog.setNameFilter(
-                "Supported Spatial Files (*.shp *.tif *.tiff);;"
-                "Shapefiles (*.shp);;GeoTIFF Files (*.tif *.tiff)"
+                tr("Supported Spatial Files (*.shp *.tif *.tiff);;"
+                "Shapefiles (*.shp);;GeoTIFF Files (*.tif *.tiff)")
             )
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(860, 520)
@@ -276,10 +277,10 @@ class PreprocessDialog(QDialog):
                 preview = "; ".join(names[:3])
                 if len(names) > 3:
                     preview += f"; … (+{len(names) - 3})"
-                line_edit.setText(f"{len(names)} file(s): {preview}")
+                line_edit.setText(tr(f"{len(names)} file(s): {preview}"))
             return
         else:
-            dialog = QFileDialog(self, "Select File")
+            dialog = QFileDialog(self, tr("Select File"))
             dialog.setFileMode(QFileDialog.ExistingFile)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)

@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFrame, QFileDialog,
                              QGraphicsDropShadowEffect, QWidget, QSizePolicy)
@@ -81,7 +82,7 @@ class VolumeDialog(QDialog):
 
         # 5. Run 按钮
         btn_layout = QHBoxLayout()
-        self.btn_run = QPushButton("  Run") 
+        self.btn_run = localized(QPushButton("  Run"))
         self.btn_run.setFixedSize(251, 60)
         self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet("""
@@ -133,7 +134,7 @@ class VolumeDialog(QDialog):
         }
         title_text = title_map.get(self.mode, "Volume Tool")
         
-        title_lbl = QLabel(title_text)
+        title_lbl = localized(QLabel(title_text))
         title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #fff; background: transparent; margin-left: 5px;")
 
         btn_close = QPushButton()
@@ -167,7 +168,7 @@ class VolumeDialog(QDialog):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(10)
 
-        lbl = QLabel(label_text)
+        lbl = localized(QLabel(label_text))
         lbl.setWordWrap(True) 
         lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lbl.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF; background: transparent;")
@@ -180,7 +181,7 @@ class VolumeDialog(QDialog):
         if is_value:
             le.setText(placeholder)
         else:
-            le.setPlaceholderText(placeholder)
+            le.setPlaceholderText(tr(placeholder))
 
         border_color = "#FBDC58" if style == "Gold" else "#27C77B"
         le.setStyleSheet(f"""
@@ -226,9 +227,9 @@ class VolumeDialog(QDialog):
 
     def browse_action(self, line_edit, save_mode):
         if save_mode:
-            dialog = QFileDialog(self, "Save CSV")
+            dialog = QFileDialog(self, tr("Save CSV"))
             dialog.setAcceptMode(QFileDialog.AcceptSave)
-            dialog.setNameFilter("CSV Files (*.csv);;All Files (*)")
+            dialog.setNameFilter(tr("CSV Files (*.csv);;All Files (*)"))
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
@@ -236,7 +237,7 @@ class VolumeDialog(QDialog):
                 if not path.lower().endswith(".csv"): path += ".csv"
                 line_edit.setText(path)
         else:
-            dialog = QFileDialog(self, "Select File")
+            dialog = QFileDialog(self, tr("Select File"))
             dialog.setFileMode(QFileDialog.ExistingFile)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)

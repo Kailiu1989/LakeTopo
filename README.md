@@ -1,6 +1,11 @@
 # LakeTopo
 A semi-automated machine learning software for full lake depth inversion, from field bathymetric points and surrounding terrain DEM to complete bathymetry.
 
+Click **中文 / English** in the lower-right corner to switch the interface language.
+Pages, dialogs, progress messages, map properties and chart labels update together.
+The choice is remembered for the next launch, while input paths, parameters and
+results are retained. Application translations are maintained in `ui/translations.py`.
+
 ## Third-Party Software
 
 This project uses [CesiumJS](https://github.com/CesiumGS/cesium),

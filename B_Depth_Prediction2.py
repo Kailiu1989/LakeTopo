@@ -79,9 +79,12 @@ def XGBoost(_trainingData, _testData, _predictedData, _plotPath=None):
     # 绘制散点图
     plt.scatter(y_test, y_pred, alpha=0.5)
     plt.plot([min(y_test), max(y_test)], [min(y_test), max(y_test)], 'r--')
-    plt.xlabel('实际值')
-    plt.ylabel('预测值')
-    plt.title(f'预测 vs 实际 (R²={r2:.3f}, MAE={mae:.3f})')
+    from ui.i18n import configure_plot_fonts, track_plot_language, tr
+    configure_plot_fonts()
+    plt.xlabel(tr('Observed value'))
+    plt.ylabel(tr('Predicted value'))
+    plt.title(tr(f'Predicted vs observed (R²={r2:.3f}, MAE={mae:.3f})'))
+    track_plot_language(plt.gcf())
     if _plotPath:
         plt.savefig(_plotPath, dpi=300, bbox_inches='tight')
     plt.show()

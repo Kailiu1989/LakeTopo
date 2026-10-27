@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ui.i18n import configure_plot_fonts, language_manager, localized, tr
+
 import numpy as np
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -26,6 +28,16 @@ TEXT_COLOR = "#a9bdc5"
 CYAN = "#00d9f5"
 WATER = "#2dd4ff"
 
+configure_plot_fonts()
+
+
+class LocalizedCanvas(FigureCanvas):
+    def retranslate(self, _language):
+        from matplotlib.text import Text
+        for artist in self.figure.findobj(Text):
+            artist.set_text(tr(artist.get_text()))
+        self.draw_idle()
+
 
 def _style_2d_axes(ax):
     ax.set_facecolor(PANEL_BACKGROUND)
@@ -37,7 +49,7 @@ def _style_2d_axes(ax):
     ax.yaxis.label.set_color(TEXT_COLOR)
 
 
-class EVCurveCanvas(FigureCanvas):
+class EVCurveCanvas(LocalizedCanvas):
     """Interactive elevation-volume curve embedded in the Qt window."""
 
     level_selected = pyqtSignal(int)
@@ -52,6 +64,7 @@ class EVCurveCanvas(FigureCanvas):
         self.selected_index = 0
         self.mpl_connect("button_press_event", self._on_click)
         self._draw_empty()
+        language_manager().language_changed.connect(self.retranslate)
 
     def _new_axes(self):
         self.figure.clear()
@@ -63,12 +76,12 @@ class EVCurveCanvas(FigureCanvas):
         ax = self._new_axes()
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
-        ax.set_xlabel("Water level (m)")
-        ax.set_ylabel("Volume (10⁸ m³)")
+        ax.set_xlabel(tr("Water level (m)"))
+        ax.set_ylabel(tr("Volume (10⁸ m³)"))
         ax.text(
             0.5,
             0.5,
-            "Run E-V Curve to generate results",
+            tr("Run E-V Curve to generate results"),
             color="#607780",
             ha="center",
             va="center",
@@ -134,8 +147,8 @@ class EVCurveCanvas(FigureCanvas):
             ha="left",
             va="top",
         )
-        ax.set_xlabel("Water level (m)", fontsize=8)
-        ax.set_ylabel("Volume (10⁸ m³)", fontsize=8)
+        ax.set_xlabel(tr("Water level (m)"), fontsize=8)
+        ax.set_ylabel(tr("Volume (10⁸ m³)"), fontsize=8)
         ax.xaxis.set_major_locator(MaxNLocator(nbins=7))
         ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
         ax.margins(x=0.03, y=0.12)
@@ -149,7 +162,7 @@ class EVCurveCanvas(FigureCanvas):
         self.select_index(nearest)
 
 
-class Lake3DCanvas(FigureCanvas):
+class Lake3DCanvas(LocalizedCanvas):
     """Interactive 3-D terrain with a water surface at the selected level."""
 
     def __init__(self, parent=None):
@@ -163,6 +176,7 @@ class Lake3DCanvas(FigureCanvas):
         self.x_label = "X"
         self.y_label = "Y"
         self._draw_empty()
+        language_manager().language_changed.connect(self.retranslate)
 
     def _new_axes(self):
         self.figure.clear()
@@ -187,13 +201,13 @@ class Lake3DCanvas(FigureCanvas):
 
     def _draw_empty(self):
         ax = self._new_axes()
-        ax.set_xlabel("X", fontsize=7, labelpad=2)
-        ax.set_ylabel("Y", fontsize=7, labelpad=2)
-        ax.set_zlabel("Elevation (m)", fontsize=7, labelpad=2)
+        ax.set_xlabel(tr("X"), fontsize=7, labelpad=2)
+        ax.set_ylabel(tr("Y"), fontsize=7, labelpad=2)
+        ax.set_zlabel(tr("Elevation (m)"), fontsize=7, labelpad=2)
         ax.text2D(
             0.5,
             0.52,
-            "3-D simulation will appear here",
+            tr("3-D simulation will appear here"),
             transform=ax.transAxes,
             color="#607780",
             ha="center",
@@ -243,9 +257,9 @@ class Lake3DCanvas(FigureCanvas):
                 ccount=min(90, self.z.shape[1]),
             )
 
-        ax.set_xlabel(self.x_label, fontsize=7, labelpad=2)
-        ax.set_ylabel(self.y_label, fontsize=7, labelpad=2)
-        ax.set_zlabel("Elevation (m)", fontsize=7, labelpad=2)
+        ax.set_xlabel(tr(self.x_label), fontsize=7, labelpad=2)
+        ax.set_ylabel(tr(self.y_label), fontsize=7, labelpad=2)
+        ax.set_zlabel(tr("Elevation (m)"), fontsize=7, labelpad=2)
         ax.view_init(elev=28, azim=-58)
         ax.set_box_aspect((1.35, 1.0, 0.65))
         ax.xaxis.set_major_locator(MaxNLocator(4))
@@ -294,9 +308,9 @@ class VolumeVisualizationWidget(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 0, 8, 0)
         header_layout.setSpacing(8)
-        title_label = QLabel(f"›  {title}")
+        title_label = localized(QLabel(f"›  {title}"))
         title_label.setStyleSheet("color: #dffdf6; font-size: 12px; font-weight: 600;")
-        status_label = QLabel(status)
+        status_label = localized(QLabel(status))
         status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         status_label.setStyleSheet("color: #55b8c8; font-size: 9px;")
         status_label.setMinimumWidth(0)
@@ -316,15 +330,15 @@ class VolumeVisualizationWidget(QWidget):
 
     def set_busy(self, busy=True):
         if busy:
-            self.curve_status.setText("Calculating elevation-volume samples…")
-            self.simulation_status.setText("Preparing terrain model…")
+            self.curve_status.setText(tr("Calculating elevation-volume samples…"))
+            self.simulation_status.setText(tr("Preparing terrain model…"))
 
     def set_error(self, message):
-        self.curve_status.setText(message)
+        self.curve_status.setText(tr(message))
         if self.result:
-            self.simulation_status.setText("Previous 3-D result retained")
+            self.simulation_status.setText(tr("Previous 3-D result retained"))
         else:
-            self.simulation_status.setText("No simulation result available")
+            self.simulation_status.setText(tr("No simulation result available"))
 
     def set_result(self, result):
         self.result = result
@@ -340,7 +354,7 @@ class VolumeVisualizationWidget(QWidget):
         )
         self.curve_canvas.set_data(levels, volumes, default_index)
         self._select_level(default_index)
-        self.curve_status.setText("Click a point on the curve to update the 3-D water surface")
+        self.curve_status.setText(tr("Click a point on the curve to update the 3-D water surface"))
 
     def _select_level(self, index):
         if not self.result:
@@ -354,5 +368,5 @@ class VolumeVisualizationWidget(QWidget):
         volume = float(volumes[index])
         self.simulation_canvas.set_water_level(level)
         self.simulation_status.setText(
-            f"Water level: {level:.2f} m   Volume: {volume:.4g} ×10⁸ m³"
+            tr(f"Water level: {level:.2f} m   Volume: {volume:.4g} ×10⁸ m³")
         )

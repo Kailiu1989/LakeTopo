@@ -139,7 +139,7 @@ def buildLakeDEM(
     _report_progress(progress_callback, 37, "Reading the lake polygon…")
     lake_rings = get_largest_polygon_rings(lake_polygon_file)
     if not lake_rings:
-        raise RuntimeError("未能读取到湖区面数据，请检查 polygon shp 文件！")
+        raise RuntimeError("Unable to read the lake polygon; check the polygon SHP file.")
     polygon_coords = np.vstack(lake_rings)
 
     print("▶ griddata插值 DEM ...")

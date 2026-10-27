@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QFrame, QComboBox,
                              QGraphicsDropShadowEffect, QWidget, QSizePolicy, QFileDialog)
@@ -92,7 +93,7 @@ class BathymetryDialog(QDialog):
 
         # 5. Run 按钮固定位置
         btn_layout = QHBoxLayout()
-        self.btn_run = QPushButton("  Run") 
+        self.btn_run = localized(QPushButton("  Run"))
         self.btn_run.setFixedSize(251, 60)
         self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet("""
@@ -148,7 +149,7 @@ class BathymetryDialog(QDialog):
         }
         title_text = title_map.get(self.mode, "Bathymetry Tool")
         
-        title_lbl = QLabel(title_text)
+        title_lbl = localized(QLabel(title_text))
         title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #fff; background: transparent; margin-left: 5px;")
 
         btn_close = QPushButton()
@@ -284,7 +285,7 @@ class BathymetryDialog(QDialog):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(10)
 
-        lbl = QLabel(label_text)
+        lbl = localized(QLabel(label_text))
         lbl.setWordWrap(True) 
         lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lbl.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF; background: transparent;")
@@ -297,7 +298,7 @@ class BathymetryDialog(QDialog):
         if is_value:
             le.setText(placeholder)
         else:
-            le.setPlaceholderText(placeholder)
+            le.setPlaceholderText(tr(placeholder))
 
         border_color = "#FBDC58" if style == "Gold" else "#27C77B"
         le.setStyleSheet(f"""
@@ -347,14 +348,15 @@ class BathymetryDialog(QDialog):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(10)
 
-        lbl = QLabel(label_text)
+        lbl = localized(QLabel(label_text))
         lbl.setWordWrap(True)
         lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         lbl.setStyleSheet("font-size: 16px; font-weight: 600; color: #FFFFFF; background: transparent;")
 
         combo = QComboBox()
         combo.setFixedHeight(42)
-        combo.addItems(items)
+        for item in items:
+            combo.addItem(tr(item), item)
         combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         
         combo.setStyleSheet("""
@@ -376,25 +378,25 @@ class BathymetryDialog(QDialog):
 
     def browse_action(self, line_edit, is_folder, save_mode=False, file_filter="All Files (*)", default_ext=None):
         if is_folder:
-            dialog = QFileDialog(self, "Select Directory")
+            dialog = QFileDialog(self, tr("Select Directory"))
             dialog.setFileMode(QFileDialog.Directory)
             dialog.setOption(QFileDialog.ShowDirsOnly, True)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
         elif save_mode:
-            dialog = QFileDialog(self, "Save File")
+            dialog = QFileDialog(self, tr("Save File"))
             dialog.setAcceptMode(QFileDialog.AcceptSave)
-            dialog.setNameFilter(file_filter)
+            dialog.setNameFilter(tr(file_filter))
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
             if path and default_ext and not path.lower().endswith((".tif", ".tiff")):
                 path += default_ext
         else:
-            dialog = QFileDialog(self, "Select File")
+            dialog = QFileDialog(self, tr("Select File"))
             dialog.setFileMode(QFileDialog.ExistingFile)
-            dialog.setNameFilter(file_filter)
+            dialog.setNameFilter(tr(file_filter))
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
             dialog.resize(760, 480)
             path = dialog.selectedFiles()[0] if dialog.exec_() == QFileDialog.Accepted else ""
@@ -407,7 +409,7 @@ class BathymetryDialog(QDialog):
             if isinstance(widget, QLineEdit):
                 data[key] = widget.text().strip()
             elif isinstance(widget, QComboBox):
-                data[key] = widget.currentText()
+                data[key] = widget.currentData()
         self.run_signal.emit(self.mode, data)
         self.accept()
 

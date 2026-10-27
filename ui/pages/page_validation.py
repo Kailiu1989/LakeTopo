@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 import os
 import numpy as np
 import pandas as pd
@@ -58,7 +59,7 @@ class PageValidation(QWidget):
         main_layout.addWidget(sidebar)
 
     def add_sidebar_btn(self, layout, text, mode_key):
-        btn = QPushButton(text)
+        btn = localized(QPushButton(text))
         btn.setObjectName("sideBtnCyan")
         btn.setFixedSize(270, 60)
         btn.setCursor(Qt.PointingHandCursor)
@@ -133,18 +134,18 @@ class PageValidation(QWidget):
             interval_str = data.get('interval', '5')
             
             if not work_path:
-                QMessageBox.warning(self, "Error", "Workspace path is required.")
+                QMessageBox.warning(self, tr("Error"), tr("Workspace path is required."))
                 return
             
             try:
                 interval = int(interval_str)
             except ValueError:
-                QMessageBox.warning(self, "Error", "Interval must be an integer.")
+                QMessageBox.warning(self, tr("Error"), tr("Interval must be an integer."))
                 return
 
             # 2. 调用外部计算模块
             # 注意：需确保 PredictFunc2 已正确导入
-            QMessageBox.information(self, "Processing", "Starting accuracy validation (ML model)...")
+            QMessageBox.information(self, tr("Processing"), tr("Starting accuracy validation (ML model)..."))
             
             # 这里调用您原代码中的逻辑
             workspace_dir = os.path.normpath(work_path)
@@ -158,15 +159,15 @@ class PageValidation(QWidget):
             results_df = pd.DataFrame({'MAE': [mae], 'R²': [r2]})
             results_df.to_csv(acc_csv, index=False, encoding='utf-8-sig')
             msg = f"{msg}\n\nResults saved to:\n{acc_csv}\n{acc_pic}"
-            QMessageBox.information(self, "Success", msg)
+            QMessageBox.information(self, tr("Success"), tr(msg))
 
             # 4. 询问是否保存结果 (原代码逻辑)
             results_df = pd.DataFrame({'MAE': [mae], 'R²': [r2]})
 
         except NameError:
-            QMessageBox.critical(self, "System Error", "Module 'B_Depth_Prediction2' not loaded.")
+            QMessageBox.critical(self, tr("System Error"), tr("Module 'B_Depth_Prediction2' not loaded."))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Processing failed: {str(e)}")
+            QMessageBox.critical(self, tr("Error"), tr(f"Processing failed: {str(e)}"))
 
     def get_inverse_geotransform(self, geotransform):
         inv_gt = gdal.InvGeoTransform(geotransform)
@@ -206,15 +207,15 @@ class PageValidation(QWidget):
 
         # 检查文件是否存在
         if not os.path.exists(point_shp) or not os.path.exists(input_raster) or not os.path.exists(surface_dem):
-            QMessageBox.warning(self, "Error", "Input files (SHP or Raster) not found.")
+            QMessageBox.warning(self, tr("Error"), tr("Input files (SHP or Raster) not found."))
             return
         ok, message = cf.check_spatial_references_match([point_shp, input_raster, surface_dem])
         if not ok:
-            QMessageBox.warning(self, "Projection Mismatch", message)
+            QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
             return
         
         if not output_txt:
-            QMessageBox.warning(self, "Error", "Output TXT path is required.")
+            QMessageBox.warning(self, tr("Error"), tr("Output TXT path is required."))
             return
         try:
             pred_ds = gdal.Open(input_raster)
@@ -281,13 +282,13 @@ class PageValidation(QWidget):
 
             QMessageBox.information(
                 self,
-                "Success",
-                f"Check Completed!\nValid Points: {len(diffs)}\nMax: {max_diff}\nMin: {min_diff}\nMean: {mean_diff}\nMAE: {mae}\nRMSE: {rmse}\nSaved to: {output_txt}"
+                tr("Success"),
+                tr(f"Check Completed!\nValid Points: {len(diffs)}\nMax: {max_diff}\nMin: {min_diff}\nMean: {mean_diff}\nMAE: {mae}\nRMSE: {rmse}\nSaved to: {output_txt}")
             )
             return
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Check failed: {str(e)}")
+            QMessageBox.critical(self, tr("Error"), tr(f"Check failed: {str(e)}"))
             return
 
         try:
@@ -343,8 +344,8 @@ class PageValidation(QWidget):
                 f.write(f"Max Difference: {max_diff}\n")
                 f.write(f"Min Difference: {min_diff}\n")
             
-            QMessageBox.information(self, "Success", f"Check Completed!\nMax Diff: {max_diff}\nMin Diff: {min_diff}\nSaved to: {output_txt}")
+            QMessageBox.information(self, tr("Success"), tr(f"Check Completed!\nMax Diff: {max_diff}\nMin Diff: {min_diff}\nSaved to: {output_txt}"))
 
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Check failed: {str(e)}")
+            QMessageBox.critical(self, tr("Error"), tr(f"Check failed: {str(e)}"))

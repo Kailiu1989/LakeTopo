@@ -1,3 +1,4 @@
+from ui.i18n import localized, tr
 import os
 import numpy as np
 from osgeo import gdal, ogr
@@ -219,7 +220,7 @@ class PageBathymetry(QWidget):
         main_layout.addWidget(sidebar)
 
     def add_sidebar_btn(self, layout, text, mode_key):
-        btn = QPushButton(text)
+        btn = localized(QPushButton(text))
         btn.setObjectName("sideBtnCyan")
         btn.setFixedSize(270, 60)
         btn.setCursor(Qt.PointingHandCursor)
@@ -342,7 +343,7 @@ class PageBathymetry(QWidget):
             elif mode == "mosaic":
                 self.logic_mosaic(data)
         except Exception as e:
-            QMessageBox.critical(self, "Execution Error", str(e))
+            QMessageBox.critical(self, tr("Execution Error"), tr(str(e)))
 
     # =========================================================================
     # [业务逻辑实现]
@@ -359,13 +360,13 @@ class PageBathymetry(QWidget):
             p7 = data.get('survey_path', '').strip()
 
             if not os.path.isdir(p1):
-                QMessageBox.warning(self, "Error", "Workspace directory not found.")
+                QMessageBox.warning(self, tr("Error"), tr("Workspace directory not found."))
                 return
             if not p6 or not os.path.isfile(p6):
-                QMessageBox.warning(self, "Error", "Lake polygon SHP file not found.")
+                QMessageBox.warning(self, tr("Error"), tr("Lake polygon SHP file not found."))
                 return
             if not p7 or not os.path.isfile(p7):
-                QMessageBox.warning(self, "Error", "In-situ bath points file not found.")
+                QMessageBox.warning(self, tr("Error"), tr("In-situ bath points file not found."))
                 return
 
             resolved_workspace, resolved_lake = mainFunc._resolve_workspace(p1, p2)
@@ -375,9 +376,9 @@ class PageBathymetry(QWidget):
             if not os.path.isfile(default_dem):
                 QMessageBox.warning(
                     self,
-                    "Error",
-                    f"Default DEM file not found: {default_dem}\n"
-                    "Gen. Prediction Points expects <lake>_merit.tif in the workspace.",
+                    tr("Error"),
+                    tr(f"Default DEM file not found: {default_dem}\n"
+                    "Gen. Prediction Points expects <lake>_merit.tif in the workspace."),
                 )
                 return
 
@@ -385,7 +386,7 @@ class PageBathymetry(QWidget):
                 [default_dem, p6, p7]
             )
             if not ok:
-                QMessageBox.warning(self, "Projection Mismatch", message)
+                QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
                 return
 
             params = {
@@ -416,10 +417,10 @@ class PageBathymetry(QWidget):
             survey_path = data.get('survey_path', '').strip()
 
             if not os.path.isdir(p1):
-                QMessageBox.warning(self, "Error", "Workspace directory not found.")
+                QMessageBox.warning(self, tr("Error"), tr("Workspace directory not found."))
                 return
             if not survey_path or not os.path.isfile(survey_path):
-                QMessageBox.warning(self, "Error", "In-situ bath points file not found.")
+                QMessageBox.warning(self, tr("Error"), tr("In-situ bath points file not found."))
                 return
 
             params = {
@@ -443,16 +444,16 @@ class PageBathymetry(QWidget):
         if self._prediction_thread is not None and self._prediction_thread.isRunning():
             QMessageBox.information(
                 self,
-                "Processing",
-                "A bathymetry prediction task is already running.",
+                tr("Processing"),
+                tr("A bathymetry prediction task is already running."),
             )
             return
 
         self._prediction_model = params.get("model") if mode == "pred_depth" else None
         self._prediction_progress = QProgressDialog(
-            initial_message, None, 0, 100, self.window()
+            tr(initial_message), None, 0, 100, self.window()
         )
-        self._prediction_progress.setWindowTitle(title)
+        self._prediction_progress.setWindowTitle(tr(title))
         self._prediction_progress.setWindowModality(Qt.WindowModal)
         self._prediction_progress.setAutoClose(False)
         self._prediction_progress.setAutoReset(False)
@@ -476,7 +477,7 @@ class PageBathymetry(QWidget):
 
     def _update_prediction_progress(self, value, message):
         if self._prediction_progress is not None:
-            self._prediction_progress.setLabelText(message)
+            self._prediction_progress.setLabelText(tr(message))
             self._prediction_progress.setValue(max(0, min(100, int(value))))
 
     def _close_prediction_progress(self):
@@ -489,14 +490,14 @@ class PageBathymetry(QWidget):
         """Save the result; user dialogs are shown only after QThread has stopped."""
         self._prediction_outcome = ("success", mode, result)
         if self._prediction_progress is not None:
-            self._prediction_progress.setLabelText("Finalizing the task…")
+            self._prediction_progress.setLabelText(tr("Finalizing the task…"))
             self._prediction_progress.setValue(100)
 
     def _queue_prediction_failure(self, mode, message):
         """Save the error; user dialogs are shown only after QThread has stopped."""
         self._prediction_outcome = ("failure", mode, message)
         if self._prediction_progress is not None:
-            self._prediction_progress.setLabelText("Finalizing the task…")
+            self._prediction_progress.setLabelText(tr("Finalizing the task…"))
 
     def _on_prediction_thread_finished(self):
         """Release thread-owned objects before opening a modal result dialog."""
@@ -523,33 +524,33 @@ class PageBathymetry(QWidget):
                 "terrain": "Terrain generation failed",
                 "mosaic": "DEM mosaic failed",
             }.get(mode, "Bathymetry task failed")
-            QMessageBox.critical(self, "Execution Error", f"{prefix}: {result}")
+            QMessageBox.critical(self, tr("Execution Error"), tr(f"{prefix}: {result}"))
         elif mode == "pred_depth":
             QMessageBox.information(
                 self,
-                "Success",
-                "Task Completed!\n"
+                tr("Success"),
+                tr("Task Completed!\n"
                 f"Model: {model_name or 'Unknown'}\n"
-                f"Holdout MAE: {float(result):.4f}",
+                f"Holdout MAE: {float(result):.4f}"),
             )
         elif mode == "terrain":
             QMessageBox.information(
                 self,
-                "Success",
-                f"Terrain DEM generated successfully!\nOutput: {result}",
+                tr("Success"),
+                tr(f"Terrain DEM generated successfully!\nOutput: {result}"),
             )
         elif mode == "mosaic":
             QMessageBox.information(
                 self,
-                "Success",
-                "DEM mosaic completed!\n"
+                tr("Success"),
+                tr("DEM mosaic completed!\n"
                 f"Operator: {result['operator']}\n"
                 f"Lake pixels in target grid: {result['lake_pixels']:,}\n"
                 f"Changed target pixels: {result['changed_pixels']:,}\n"
-                f"Output: {result['output']}",
+                f"Output: {result['output']}"),
             )
         else:
-            QMessageBox.information(self, "Success", "Task Completed!")
+            QMessageBox.information(self, tr("Success"), tr("Task Completed!"))
 
     def shutdown(self):
         """Wait for an active prediction task before destroying the page."""
@@ -576,18 +577,18 @@ class PageBathymetry(QWidget):
             }
             for label, path in required_files.items():
                 if not path or not os.path.isfile(path):
-                    QMessageBox.warning(self, "Error", f"{label} file not found.")
+                    QMessageBox.warning(self, tr("Error"), tr(f"{label} file not found."))
                     return
             if not p5:
-                QMessageBox.warning(self, "Error", "Output DEM path is required.")
+                QMessageBox.warning(self, tr("Error"), tr("Output DEM path is required."))
                 return
             if p6 <= 0:
-                QMessageBox.warning(self, "Error", "Resolution must be greater than zero.")
+                QMessageBox.warning(self, tr("Error"), tr("Resolution must be greater than zero."))
                 return
 
             ok, message = cf.check_spatial_references_match([p1, p3, p4])
             if not ok:
-                QMessageBox.warning(self, "Projection Mismatch", message)
+                QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
                 return
 
             self._start_prediction_task(
@@ -615,7 +616,7 @@ class PageBathymetry(QWidget):
         out_raster = data.get('out_raster', '')
 
         if not (depth_raster and out_raster):
-            QMessageBox.warning(self, "Error", "Depth raster and Output path are required.")
+            QMessageBox.warning(self, tr("Error"), tr("Depth raster and Output path are required."))
             return
 
         base_elev = 0.0
@@ -624,12 +625,12 @@ class PageBathymetry(QWidget):
         elif lake_shp and surround_dem:
             ok, message = cf.check_spatial_references_match([lake_shp, surround_dem])
             if not ok:
-                QMessageBox.warning(self, "Projection Mismatch", message)
+                QMessageBox.warning(self, tr("Projection Mismatch"), tr(message))
                 return
             base_elev = self.calculate_shore_elevation(lake_shp, surround_dem)
             print(f"Auto-calculated base elevation: {base_elev}")
         else:
-            QMessageBox.warning(self, "Error", "Provide Base Elevation OR Lake Polygon + Surrounding DEM.")
+            QMessageBox.warning(self, tr("Error"), tr("Provide Base Elevation OR Lake Polygon + Surrounding DEM."))
             return
         if not np.isfinite(base_elev):
             raise ValueError("Base elevation must be a finite number.")
@@ -688,10 +689,10 @@ class PageBathymetry(QWidget):
 
         QMessageBox.information(
             self,
-            "Success",
-            "Elevation adjustment done.\n"
+            tr("Success"),
+            tr("Elevation adjustment done.\n"
             f"Base Level: {base_elev:.2f}m\n"
-            f"Shoreline spikes corrected: {corrected_count:,}",
+            f"Shoreline spikes corrected: {corrected_count:,}"),
         )
 
     def logic_mosaic(self, data):
@@ -702,17 +703,17 @@ class PageBathymetry(QWidget):
         operator = data.get('operator', 'Lake DEM Priority')
 
         if not os.path.isfile(lake_dem) or not os.path.isfile(mosaic_dem):
-            QMessageBox.warning(self, "Error", "Input DEMs not found.")
+            QMessageBox.warning(self, tr("Error"), tr("Input DEMs not found."))
             return
         if not output:
-            QMessageBox.warning(self, "Error", "Output Raster path is required.")
+            QMessageBox.warning(self, tr("Error"), tr("Output Raster path is required."))
             return
         input_paths = {os.path.normcase(os.path.abspath(path)) for path in (lake_dem, mosaic_dem)}
         if os.path.normcase(os.path.abspath(output)) in input_paths:
             QMessageBox.warning(
                 self,
-                "Error",
-                "Output Raster must be a new file and cannot overwrite an input DEM.",
+                tr("Error"),
+                tr("Output Raster must be a new file and cannot overwrite an input DEM."),
             )
             return
 
