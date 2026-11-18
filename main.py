@@ -26,6 +26,10 @@ def run_packaging_smoke_test(raster_paths=()):
         from scipy.interpolate import griddata
         from scipy.ndimage import gaussian_filter
         from scipy.spatial import cKDTree
+        from Common_Function import survey_depth_filter
+        _, kept, filter_stats = survey_depth_filter([0.1, None] + [1.0] * 99 + [2.0, 100.0])
+        if filter_stats['p99'] != 2.0 or filter_stats['retained'] != 100 or kept[-1]:
+            raise RuntimeError('Packaged survey outlier filtering failed')
 
         gdal.UseExceptions()
         dataset = gdal.GetDriverByName("MEM").Create("", 3, 2, 1, gdal.GDT_Float32)
@@ -97,6 +101,7 @@ def run_packaging_smoke_test(raster_paths=()):
 
         result = (
             "PASS\n"
+            "SurveyDepthFilter=PASS (<=0.1, then >P99)\n"
             f"GDAL={gdal.VersionInfo()}\n"
             f"NumPy={np.__version__}\n"
             f"SciPy={scipy.__version__}\n"

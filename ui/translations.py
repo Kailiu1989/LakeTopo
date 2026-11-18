@@ -5,6 +5,8 @@ on both sides. Technical identifiers and physical units are intentionally kept.
 """
 
 ZH_CN = {
+    "Survey filter: exclude depths <= 0.1 m, then > P99.\nP99 is calculated from the remaining points; source files are unchanged.": "实测点过滤：先排除水深≤0.1米，再排除>P99的点。\nP99按剩余点计算，源文件不变。",
+    "Training uses filtered survey features.\nRegenerate prediction points after changing the survey data.": "模型使用已过滤实测点提取的特征训练。\n更换实测数据后，请重新运行测深点加密。",
     "LakeTopo Project": "LakeTopo 湖泊地形软件",
     "Preprocess": "数据预处理",
     "Bathymetry": "水下地形构建",

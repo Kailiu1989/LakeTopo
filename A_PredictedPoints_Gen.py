@@ -5,6 +5,7 @@ import gc
 import numpy
 from osgeo import gdal, ogr, osr
 import os
+import json
 from collections import Counter
 
 try:
@@ -556,6 +557,25 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
     if lyr is None:
         raise ValueError(f"Survey shapefile contains no readable layer: {survey_shp}")
     depth_field = cf.resolve_depth_field(lyr)
+    depths, keep, filter_stats = cf.survey_depth_filter(
+        [feature.GetField(depth_field) for feature in lyr]
+    )
+    # A numeric in-memory layer also supports numeric-text depth columns.
+    filtered_ds = ogr.GetDriverByName('Memory').CreateDataSource('filtered_survey')
+    filtered_layer = filtered_ds.CreateLayer('survey', lyr.GetSpatialRef(), lyr.GetGeomType())
+    filtered_layer.CreateField(ogr.FieldDefn('Depth', ogr.OFTReal))
+    lyr.ResetReading()
+    for index, feature in enumerate(lyr):
+        if not keep[index]:
+            continue
+        geometry = feature.GetGeometryRef()
+        if geometry is None or geometry.IsEmpty():
+            raise ValueError('A retained survey point has no geometry.')
+        retained = ogr.Feature(filtered_layer.GetLayerDefn())
+        retained.SetGeometry(geometry)
+        retained.SetField('Depth', float(depths[index]))
+        if filtered_layer.CreateFeature(retained) != ogr.OGRERR_NONE:
+            raise ValueError('Unable to prepare filtered survey points.')
     x_res = template_raster.NCol()
     y_res = template_raster.NRow()
     gt = (
@@ -579,8 +599,8 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
         band.SetNoDataValue(-9999)
         band.Fill(-9999)
         status = gdal.RasterizeLayer(
-            dst, [1], lyr,
-            options=[f"ATTRIBUTE={depth_field}", "ALL_TOUCHED=TRUE"],
+            dst, [1], filtered_layer,
+            options=["ATTRIBUTE=Depth", "ALL_TOUCHED=TRUE"],
         )
         if status != gdal.CE_None:
             raise ValueError(
@@ -594,11 +614,17 @@ def rasterize_survey_to_template(survey_shp, out_tif, template_raster, proj_wkt)
                 "cells on the lake grid. Check depth values, spatial overlap, "
                 "and coordinate reference systems."
             )
+        filter_stats.update(source=os.path.abspath(survey_shp), field=depth_field)
+        with open(os.path.splitext(out_tif)[0] + '_filter.json', 'w', encoding='utf-8') as report:
+            json.dump(filter_stats, report, ensure_ascii=False, indent=2)
+        print('Survey depth filtering:', filter_stats)
     finally:
         band = None
         dst = None
         lyr = None
         ds = None
+        filtered_layer = None
+        filtered_ds = None
 
 def determine_surveypoints_info(
     _workSP,

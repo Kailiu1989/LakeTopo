@@ -12,6 +12,35 @@ except ImportError:
     ogr = None
     osr = None
 
+def survey_depth_filter(values):
+    """Exclude nonfinite depths, <=0.1 m, then >P99 of the remaining points.
+
+    P99 uses linear interpolation; values equal to P99 are retained.
+    Filtering must precede rasterization so rejected points cannot overwrite
+    retained points in the same cell. Never apply this to predicted depths.
+    """
+    numeric = []
+    for value in values:
+        try:
+            numeric.append(float(value))
+        except (TypeError, ValueError, OverflowError):
+            numeric.append(float('nan'))
+    depths = np.asarray(numeric, dtype=float)
+    finite = np.isfinite(depths)
+    eligible = finite & (depths > 0.1)
+    if not eligible.any():
+        raise ValueError('No valid survey depths remain after excluding depths <= 0.1 m.')
+    p99 = float(np.quantile(depths[eligible], 0.99, method='linear'))
+    keep = eligible & (depths <= p99)
+    stats = dict(total=len(depths), invalid=int((~finite).sum()),
+                 excluded_le_0_1=int((finite & ~eligible).sum()),
+                 excluded_gt_p99=int((eligible & ~keep).sum()),
+                 retained=int(keep.sum()), p99=p99,
+                 rule='0.1 < depth <= P99; P99 computed after lower filtering',
+                 quantile_method='linear')
+    return depths, keep, stats
+
+
 def resolve_depth_field(layer, requested_field=None):
     """Resolve Depth/水深 aliases, while honoring explicitly named custom fields.
 

@@ -41,7 +41,7 @@ class BathymetryDialog(QDialog):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         # Cell size is derived automatically, so prediction dialogs need one row less.
-        self.setFixedSize(660, 500 if self.mode == "pred_depth" else 390)
+        self.setFixedSize(660, 550 if self.mode in ("pred_loc", "pred_depth") else 390)
 
         self.dragPos = QPoint()
         self.widgets = {} 
@@ -203,6 +203,13 @@ class BathymetryDialog(QDialog):
                 )
             self.widgets['interval'] = self.create_input_row("Interval (pixels):", "5", style="Gold", is_value=True)
             self.widgets['win_size'] = self.create_input_row("Window Size:", "5", style="Gold", is_value=True)
+            if self.mode == "pred_loc":
+                note = localized(QLabel("Survey filter: exclude depths <= 0.1 m, then > P99.\nP99 is calculated from the remaining points; source files are unchanged."))
+            else:
+                note = localized(QLabel("Training uses filtered survey features.\nRegenerate prediction points after changing the survey data."))
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #b7cdc8; font-size: 12px;")
+            self.form_layout.addWidget(note)
 
         # 3. 水下地形生成
         elif self.mode == "terrain":
